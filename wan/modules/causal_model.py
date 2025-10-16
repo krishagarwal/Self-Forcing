@@ -16,6 +16,153 @@ import torch.nn as nn
 import torch
 import math
 import torch.distributed as dist
+from einops import rearrange
+import os
+
+class MonarchAttnImplicitFn(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, Q, K, V, sm_scale, num_iters, eps):
+        b, a, i, j, h, _ = Q.shape
+        block_b1, block_b2 = i, j
+        f = K.size(-5)
+
+        sm_scale_sqrt = sm_scale ** 0.5
+        Q = Q * sm_scale_sqrt
+        K = K * sm_scale_sqrt
+
+        L = torch.eye(block_b1, device=Q.device, dtype=Q.dtype).view(1, 1, 1, 1, 1, block_b1, block_b1).expand(b, h, a, f, block_b2, block_b1, block_b1) # (b, h, a, f, j, k, i)
+
+        with torch.no_grad():
+            for _ in range(num_iters):
+                aR = torch.einsum("bhafjki,baijhd->bafkjhd", L, Q)
+                bR = torch.einsum("bafkjhd,bfklhd->bhafkjl", aR, K)
+                # cR = torch.einsum("bhjki->bhkj", L_star).unsqueeze(-1)
+                # R = torch.softmax(bR / (cR + eps), dim=-1)
+                cR = L.sum(dim=-1, dtype=torch.float32).unsqueeze(-1).clamp_min(eps).transpose(-2, -3) # (b, h, a, f, k, j, 1)
+                z = bR.to(torch.float32) * (1.0 / (cR + eps)).clamp_max(1e4)
+                z = z - z.amax(dim=-1, keepdim=True)
+                R = torch.softmax(z, dim=-1).to(Q.dtype)
+
+                aL = torch.einsum("bhafkjl,bfklhd->bafjkhd", R, K)
+                bL = torch.einsum("bafjkhd,baijhd->bhafjki", aL, Q)
+                # cL = torch.einsum("bhkjl->bhjk", torch.xlogy(R, R)).unsqueeze(-1)
+                logz = torch.logsumexp(z, dim=-1, keepdim=True) # (b, h, a, f, k, j, 1)
+                cL = (R * (z - logz)).sum(dim=-1, keepdim=True).transpose(-2, -3) # (b, h, a, f, j, k, 1)
+                L = rearrange(bL - cL, "b h a f j k i -> b h a j i (f k)")
+                L = torch.softmax(L, dim=-1).to(Q.dtype)
+                L = rearrange(L, "b h a j i (f k) -> b h a f j k i", f=f, k=block_b1)
+
+        ctx.save_for_backward(L, R, Q, K, V)
+        ctx.eps = eps
+        ctx.sm_scale_sqrt = sm_scale_sqrt
+
+        out = torch.einsum("bhafkjl,bfklhd->bafjkhd", R, V)
+        out = torch.einsum("bhafjki,bafjkhd->baijhd", L, out)
+        return out
+
+    @staticmethod
+    def backward(ctx, grad_out):
+        L_star, R_star, Q, K, V = ctx.saved_tensors
+        eps = ctx.eps
+
+        b, a, i, j, h, _ = Q.shape
+        block_b1, block_b2 = i, j
+        f = K.size(-5)
+
+        grad_tmp = torch.einsum("baijhd,bhafjki->bafjkhd", grad_out, L_star)
+        grad_V = torch.einsum("bhafkjl,bafjkhd->bfklhd", R_star, grad_tmp)
+        grad_R = torch.einsum("bafjkhd,bfklhd->bhafkjl", grad_tmp, V)
+
+        def R_from_QK(Q_in, K_in):
+            aR = torch.einsum("bhafjki,baijhd->bafkjhd", L_star, Q_in)
+            bR = torch.einsum("bafkjhd,bfklhd->bhafkjl", aR, K_in)
+            # cR = torch.einsum("bhjki->bhkj", L_star).unsqueeze(-1)
+            # R = torch.softmax(bR / (cR + eps), dim=-1)
+            cR = L_star.sum(dim=-1, dtype=torch.float32).unsqueeze(-1).clamp_min(eps).transpose(-2, -3) # (b, h, a, f, k, j, 1)
+            z = bR.to(torch.float32) * (1.0 / (cR + eps)).clamp_max(1e4)
+            z = z - z.amax(dim=-1, keepdim=True)
+            R = torch.softmax(z, dim=-1)
+            return R.to(Q_in.dtype)
+
+        _, (grad_Q, grad_K) = torch.autograd.functional.vjp(R_from_QK, (Q, K), v=grad_R, create_graph=False, strict=True)
+
+        def O_from_L(L_in):
+            aR = torch.einsum("bhafjki,baijhd->bafkjhd", L_in, Q)
+            bR = torch.einsum("bafkjhd,bfklhd->bhafkjl", aR, K)
+            # cR = torch.einsum("bhjki->bhkj", L_in).unsqueeze(-1)
+            # R = torch.softmax(bR / (cR + eps), dim=-1)
+            cR = L_in.sum(dim=-1, dtype=torch.float32).unsqueeze(-1).clamp_min(eps).transpose(-2, -3) # (b, h, a, f, k, j, 1)
+            z = bR.to(torch.float32) * (1.0 / (cR + eps)).clamp_max(1e4)
+            z = z - z.amax(dim=-1, keepdim=True)
+            R = torch.softmax(z, dim=-1).to(L_in.dtype)
+
+            out = torch.einsum("bhafkjl,bfklhd->bafjkhd", R, V)
+            out = torch.einsum("bhafjki,bafjkhd->baijhd", L_in, out)
+            return out
+        
+        _, grad_L = torch.autograd.functional.vjp(O_from_L, L_star, v=grad_out, create_graph=False)
+
+        def L_from_L(L_in):
+            aR = torch.einsum("bhafjki,baijhd->bafkjhd", L_in, Q)
+            bR = torch.einsum("bafkjhd,bfklhd->bhafkjl", aR, K)
+            # cR = torch.einsum("bhjki->bhkj", L_in).unsqueeze(-1)
+            # R_out = torch.softmax(bR / (cR + eps), dim=-1)
+            cR = L_in.sum(dim=-1, dtype=torch.float32).unsqueeze(-1).clamp_min(eps).transpose(-2, -3) # (b, h, a, f, k, j, 1)
+            z = bR.to(torch.float32) * (1.0 / (cR + eps)).clamp_max(1e4)
+            z = z - z.amax(dim=-1, keepdim=True)
+            R_out = torch.softmax(z, dim=-1).to(L_in.dtype)
+
+            aL = torch.einsum("bhafkjl,bfklhd->bafjkhd", R_out, K)
+            bL = torch.einsum("bafjkhd,baijhd->bhafjki", aL, Q)
+            # cL = torch.einsum("bhkjl->bhjk", torch.xlogy(R_out, R_out)).unsqueeze(-1)
+            logz = torch.logsumexp(z, dim=-1, keepdim=True) # (b, h, k, j, 1)
+            cL = (R_out * (z - logz)).sum(dim=-1, keepdim=True).transpose(-2, -3) # (b, h, a, f, j, k, 1)
+            # L_out = torch.softmax(bL - cL, dim=-2).to(L_in.dtype)
+            L_out = rearrange(bL - cL, "b h a f j k i -> b h a j i (f k)")
+            L_out = torch.softmax(L_out, dim=-1).to(Q.dtype)
+            L_out = rearrange(L_out, "b h a j i (f k) -> b h a f j k i", f=f, k=block_b1)
+            return L_out
+
+        u = torch.zeros_like(grad_L)
+        r = grad_L.clone()
+        for _ in range(1):
+            u = u + r
+            _, r = torch.autograd.functional.vjp(L_from_L, L_star, v=r, create_graph=False)
+        
+        def L_from_QK(Q, K):
+            aR = torch.einsum("bhafjki,baijhd->bafkjhd", L_star, Q)
+            bR = torch.einsum("bafkjhd,bfklhd->bhafkjl", aR, K)
+            # cR = torch.einsum("bhjki->bhkj", L_star).unsqueeze(-1)
+            # R_out = torch.softmax(bR / (cR + eps), dim=-1)
+            cR = L_star.sum(dim=-1, dtype=torch.float32).unsqueeze(-1).clamp_min(eps).transpose(-2, -3) # (b, h, a, f, k, j, 1)
+            z = bR.to(torch.float32) * (1.0 / (cR + eps)).clamp_max(1e4)
+            z = z - z.amax(dim=-1, keepdim=True)
+            R_out = torch.softmax(z, dim=-1).to(Q.dtype)
+
+            aL = torch.einsum("bhafkjl,bfklhd->bafjkhd", R_out, K)
+            bL = torch.einsum("bafjkhd,baijhd->bhafjki", aL, Q)
+            # cL = torch.einsum("bhkjl->bhjk", torch.xlogy(R_out, R_out)).unsqueeze(-1)
+            logz = torch.logsumexp(z, dim=-1, keepdim=True) # (b, h, k, j, 1)
+            cL = (R_out * (z - logz)).sum(dim=-1, keepdim=True).transpose(-2, -3) # (b, h, a, f, j, k, 1)
+            # L_out = torch.softmax(bL - cL, dim=-2).to(Q.dtype)
+            L_out = rearrange(bL - cL, "b h a f j k i -> b h a j i (f k)")
+            L_out = torch.softmax(L_out, dim=-1).to(Q.dtype)
+            L_out = rearrange(L_out, "b h a j i (f k) -> b h a f j k i", f=f, k=block_b1)
+            return L_out
+
+        _, (grad_Q_L, grad_K_L) = torch.autograd.functional.vjp(
+            L_from_QK, (Q, K), v=u, create_graph=False, strict=True
+        )
+
+        grad_Q += grad_Q_L
+        grad_K += grad_K_L
+
+        grad_Q = grad_Q * ctx.sm_scale_sqrt
+        grad_K = grad_K * ctx.sm_scale_sqrt
+
+        return grad_Q, grad_K, grad_V, None, None, None
+
+monarch_attn = MonarchAttnImplicitFn.apply
 
 # wan 1.3B model has a weird channel / head configurations and require max-autotune to work with flexattention
 # see https://github.com/pytorch/pytorch/issues/133254
@@ -75,6 +222,8 @@ class CausalWanSelfAttention(nn.Module):
         self.eps = eps
         self.max_attention_size = 32760 if local_attn_size == -1 else local_attn_size * 1560
 
+        self.num_iters = int(os.getenv("MONARCH_ATTN_NUM_ITERS", "1"))
+
         # layers
         self.q = nn.Linear(dim, dim)
         self.k = nn.Linear(dim, dim)
@@ -116,6 +265,7 @@ class CausalWanSelfAttention(nn.Module):
         q, k, v = qkv_fn(x)
 
         if kv_cache is None:
+            assert False
             # if it is teacher forcing training?
             is_tf = (s == seq_lens[0].item() * 2)
             if is_tf:
@@ -203,6 +353,7 @@ class CausalWanSelfAttention(nn.Module):
             # If we are using local attention and the current KV cache size is larger than the local attention size, we need to truncate the KV cache
             kv_cache_size = kv_cache["k"].shape[1]
             num_new_tokens = roped_query.shape[1]
+            # ptr = kv_cache["k"].data_ptr()
             if self.local_attn_size != -1 and (current_end > kv_cache["global_end_index"].item()) and (
                     num_new_tokens + kv_cache["local_end_index"].item() > kv_cache_size):
                 # Calculate the number of new tokens added in this step
@@ -221,16 +372,34 @@ class CausalWanSelfAttention(nn.Module):
                 kv_cache["k"][:, local_start_index:local_end_index] = roped_key
                 kv_cache["v"][:, local_start_index:local_end_index] = v
             else:
+                # prev = kv_cache["k"].requires_grad
+                # curr = roped_key.requires_grad
                 # Assign new keys/values directly up to current_end
                 local_end_index = kv_cache["local_end_index"].item() + current_end - kv_cache["global_end_index"].item()
                 local_start_index = local_end_index - num_new_tokens
                 kv_cache["k"][:, local_start_index:local_end_index] = roped_key
                 kv_cache["v"][:, local_start_index:local_end_index] = v
-            x = attention(
-                roped_query,
-                kv_cache["k"][:, max(0, local_end_index - self.max_attention_size):local_end_index],
-                kv_cache["v"][:, max(0, local_end_index - self.max_attention_size):local_end_index]
-            )
+                # now = kv_cache["k"].requires_grad
+                # print("kv_cache_ptr", kv_cache["k"].data_ptr(), max(0, local_end_index - self.max_attention_size), local_start_index, local_end_index)
+                # if prev != now and dist.get_rank() == 0:
+                #     print(f"requires grad changed from {prev} to {now} (curr grad enabled is {curr}) global grad enabled is {torch.is_grad_enabled()}, kv_cache is at ptr {ptr} and now is at {kv_cache['k'].data_ptr()}")
+            # if kv_cache["k"].data_ptr() != ptr and dist.get_rank() == 0:
+            #     print("Warning: kv_cache has been reallocated, data_ptr changed from",
+            #           ptr, "to", kv_cache["k"].data_ptr())
+            # x = attention(
+            #     roped_query,
+            #     kv_cache["k"][:, max(0, local_end_index - self.max_attention_size):local_end_index],
+            #     kv_cache["v"][:, max(0, local_end_index - self.max_attention_size):local_end_index]
+            # )
+            block_b1 = grid_sizes[0, 1]
+            block_b2 = grid_sizes[0, 2]
+            b, s, h, d = roped_query.shape
+            curr_q = roped_query.view(b, -1, block_b1, block_b2, h, d)
+            curr_k = kv_cache["k"][:, max(0, local_end_index - self.max_attention_size):local_end_index].view(b, -1, block_b1, block_b2, h, d)
+            curr_v = kv_cache["v"][:, max(0, local_end_index - self.max_attention_size):local_end_index].view(b, -1, block_b1, block_b2, h, d)
+            x = monarch_attn(curr_q, curr_k, curr_v, d ** -0.5, self.num_iters, self.eps).reshape(b, s, h, d)
+
+            # print(grid_sizes)
             kv_cache["global_end_index"].fill_(current_end)
             kv_cache["local_end_index"].fill_(local_end_index)
 
@@ -811,6 +980,8 @@ class CausalWanModel(ModelMixin, ConfigMixin):
 
         for block_index, block in enumerate(self.blocks):
             if torch.is_grad_enabled() and self.gradient_checkpointing:
+                # if block_index == 0 and dist.get_rank() == 0:
+                #     print("gradient checkpointing, kv grad enabled", kv_cache[block_index]["k"].requires_grad)
                 kwargs.update(
                     {
                         "kv_cache": kv_cache[block_index],
@@ -824,6 +995,8 @@ class CausalWanModel(ModelMixin, ConfigMixin):
                     use_reentrant=False,
                 )
             else:
+                # if block_index == 0 and dist.get_rank() == 0:
+                #     print("no gradient checkpointing, kv grad enabled", kv_cache[block_index]["k"].requires_grad)
                 kwargs.update(
                     {
                         "kv_cache": kv_cache[block_index],
@@ -1003,9 +1176,15 @@ class CausalWanModel(ModelMixin, ConfigMixin):
         *args,
         **kwargs
     ):
+        # if dist.get_rank() == 0:
+        #     print("In forward")
         if kwargs.get('kv_cache', None) is not None:
+            # if dist.get_rank() == 0:
+            #     print("Using kv cache, grad enabled is", kwargs['kv_cache'][0]["k"].requires_grad)
             return self._forward_inference(*args, **kwargs)
         else:
+            # if dist.get_rank() == 0:
+            #     print("Not using kv cache")
             return self._forward_train(*args, **kwargs)
 
     def unpatchify(self, x, grid_sizes):

@@ -183,6 +183,8 @@ class SelfForcingTrainingPipeline:
                                 current_start=current_start_frame * self.frame_seq_length
                             )
                     else:
+                        # if dist.get_rank() == 0:
+                        #     print("Training for this step, grad_enabled is", self.kv_cache1[0]["k"].requires_grad, " | ptr is", self.kv_cache1[0]["k"].data_ptr())
                         _, denoised_pred = self.generator(
                             noisy_image_or_video=noisy_input,
                             conditional_dict=conditional_dict,
@@ -192,6 +194,9 @@ class SelfForcingTrainingPipeline:
                             current_start=current_start_frame * self.frame_seq_length
                         )
                     break
+            
+            # if dist.get_rank() == 0:
+            #     print("Done forward on this step, grad_enabled is", self.kv_cache1[0]["k"].requires_grad)
 
             # Step 3.2: record the model's output
             output[:, current_start_frame:current_start_frame + current_num_frames] = denoised_pred
@@ -205,6 +210,8 @@ class SelfForcingTrainingPipeline:
                 context_timestep * torch.ones(
                     [batch_size * current_num_frames], device=noise.device, dtype=torch.long)
             ).unflatten(0, denoised_pred.shape[:2])
+            # if dist.get_rank() == 0:
+            #     print("Rerun with timestep zero to update the cache, grad_enabled is", self.kv_cache1[0]["k"].requires_grad, " | ptr is", self.kv_cache1[0]["k"].data_ptr())
             with torch.no_grad():
                 self.generator(
                     noisy_image_or_video=denoised_pred,
@@ -249,6 +256,9 @@ class SelfForcingTrainingPipeline:
                 "global_end_index": torch.tensor([0], dtype=torch.long, device=device),
                 "local_end_index": torch.tensor([0], dtype=torch.long, device=device)
             })
+        
+        # if dist.get_rank() == 0:
+        #     print("Initialized KV cache, grad_enabled is", kv_cache1[0]["k"].requires_grad)
 
         self.kv_cache1 = kv_cache1  # always store the clean cache
 

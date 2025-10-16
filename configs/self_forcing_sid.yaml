@@ -20,7 +20,7 @@ seed: 0
 wandb_host: WANDB_HOST
 wandb_key: WANDB_KEY
 wandb_entity: WANDB_ENTITY
-wandb_project: WANDB_PROJECT
+wandb_project: self_forcing
 sharding_strategy: hybrid_full
 lr: 2.0e-06
 lr_critic: 2.0e-06
