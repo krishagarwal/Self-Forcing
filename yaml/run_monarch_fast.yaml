@@ -106,7 +106,8 @@ spec:
                   mkdir -p /checkpoint-fsx/beidchen-sandbox/video/self_forcing/wandb &&
                   export WANDB_DIR=/checkpoint-fsx/beidchen-sandbox/video/self_forcing/wandb &&
                   cd /code-fsx/beidchen-sandbox/Self-Forcing &&
-                  pip install -e . &&
+                  pip install -r requirements.txt &&
+                  python setup.py develop &&
                   mkdir -p /code-fsx/beidchen-sandbox/self_forcing_logs/self_forcing_dmd_monarch_fast &&
                   export MONARCH_ATTN_NUM_ITERS=1 &&
                   torchrun --nproc_per_node=8 --rdzv-conf="timeout=7200,read_timeout=7200,join_timeout=7200" train.py --config_path configs/self_forcing_sid.yaml --logdir /code-fsx/beidchen-sandbox/self_forcing_logs/self_forcing_dmd_monarch_fast --wandb_name dmd_monarch_fast | tee /code-fsx/beidchen-sandbox/self_forcing_dmd_monarch_fast.log
