@@ -103,8 +103,8 @@ spec:
                   export NCCL_DEBUG=INFO &&
                   export NCCL_DEBUG_SUBSYS=INIT,NET,ENV &&
                   wandb login --relogin $WANDB_API_KEY &&
-                  mkdir -p /checkpoint-fsx/beidchen-sandbox/video/self_forcing/wandb &&
-                  export WANDB_DIR=/checkpoint-fsx/beidchen-sandbox/video/self_forcing/wandb &&
+                  mkdir -p /checkpoints-fsx/beidchen-sandbox/video/self_forcing/wandb &&
+                  export WANDB_DIR=/checkpoints-fsx/beidchen-sandbox/video/self_forcing/wandb &&
                   cd /code-fsx/beidchen-sandbox/Self-Forcing &&
                   pip install -r requirements.txt &&
                   python setup.py develop &&
@@ -130,7 +130,7 @@ spec:
                   name: fsx-claim-general--atl-2a2
                 - mountPath: /code-fsx
                   name: fsx-claim-general--atl-2a1
-                - mountPath: /checkpoint-fsx
+                - mountPath: /checkpoints-fsx
                   name: fsx-claim-general--atl-2a3
                 - mountPath: /dev/shm
                   name: dshm
