@@ -15,6 +15,8 @@ import torch
 import wandb
 import time
 import os
+from torchvision.io import write_video
+from pipeline import CausalInferencePipeline
 
 
 class Trainer:
@@ -179,6 +181,8 @@ class Trainer:
         self.max_grad_norm_critic = getattr(config, "max_grad_norm_critic", 10.0)
         self.previous_time = None
 
+        self.val_pipeline = CausalInferencePipeline(config, self.device, generator=self.model.generator, text_encoder=self.model.text_encoder, vae=self.model.vae)
+
     def save(self):
         print("Start gathering distributed model states...")
         generator_state_dict = fsdp_state_dict(
@@ -312,7 +316,33 @@ class Trainer:
     def train(self):
         start_step = self.step
 
-        while True:
+        while self.step <= 2000:
+            if self.step % 100 == 0:
+                with torch.no_grad():
+                    prompts = [
+                        "A movie trailer featuring the adventures of the 30 year old space man wearing a red wool knitted motorcycle helmet, blue sky, salt desert, cinematic style, shot on 35mm film, vivid colors.",
+                        "The camera rotates around a large stack of vintage televisions all showing different programs — 1950s sci-fi movies, horror movies, news, static, a 1970s sitcom, etc, set inside a large New York museum gallery.",
+                        "A white and orange tabby cat is seen happily darting through a dense garden, as if chasing something. Its eyes are wide and happy as it jogs forward, scanning the branches, flowers, and leaves as it walks. The path is narrow as it makes its way between all the plants. the scene is captured from a ground-level angle, following the cat closely, giving a low and intimate perspective. The image is cinematic with warm tones and a grainy texture. The scattered daylight between the leaves and plants above creates a warm contrast, accentuating the cat’s orange fur. The shot is clear and sharp, with a shallow depth of field.",
+                        "A stylish woman walks down a Tokyo street filled with warm glowing neon and animated city signage. She wears a black leather jacket, a long red dress, and black boots, and carries a black purse. She wears sunglasses and red lipstick. She walks confidently and casually. The street is damp and reflective, creating a mirror effect of the colorful lights. Many pedestrians walk about.",
+                    ]
+                    validation = self.generate_video(
+                        self.val_pipeline,
+                        prompts=prompts,
+                    )
+                    if self.is_main_process and not self.disable_wandb:
+                        filenames = []
+                        for i, _ in enumerate(prompts):
+                            filename = f"/workspace/temp_{self.step}_{i}.mp4"
+                            write_video(filename, validation[i], fps=16)
+                            filenames.append(filename)
+                        logs = {
+                            f"validation_videos": [
+                                wandb.Video(filename, caption=prompt)
+                                for filename, prompt in zip(filenames, prompts)
+                            ]
+                        }
+                        wandb.log(logs, step=self.step)
+
             TRAIN_GENERATOR = self.step % self.config.dfake_gen_update_ratio == 0
 
             # Train the generator

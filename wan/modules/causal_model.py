@@ -223,6 +223,7 @@ class CausalWanSelfAttention(nn.Module):
         self.max_attention_size = 32760 if local_attn_size == -1 else local_attn_size * 1560
 
         self.num_iters = int(os.getenv("MONARCH_ATTN_NUM_ITERS", "1"))
+        self.target_sparsity = float(os.getenv("MONARCH_ATTN_TARGET_SPARSITY", "1.0"))
 
         # layers
         self.q = nn.Linear(dim, dim)
@@ -231,6 +232,13 @@ class CausalWanSelfAttention(nn.Module):
         self.o = nn.Linear(dim, dim)
         self.norm_q = WanRMSNorm(dim, eps=eps) if qk_norm else nn.Identity()
         self.norm_k = WanRMSNorm(dim, eps=eps) if qk_norm else nn.Identity()
+
+    def get_block_sizes(self, h, w):
+        factors = [i for i in range(1, h + 1) if h % i == 0]
+        sparsities = [1 - (f*f*w + w*w*f)/(f*f*w*w) for f in factors]
+        dists = [abs(s - self.target_sparsity) for s in sparsities]
+        min_idx = dists.index(min(dists))
+        return (factors[min_idx], w)
 
     def forward(
         self,
@@ -391,15 +399,15 @@ class CausalWanSelfAttention(nn.Module):
             #     kv_cache["k"][:, max(0, local_end_index - self.max_attention_size):local_end_index],
             #     kv_cache["v"][:, max(0, local_end_index - self.max_attention_size):local_end_index]
             # )
-            block_b1 = grid_sizes[0, 1]
-            block_b2 = grid_sizes[0, 2]
+            block_b1, block_b2 = self.get_block_sizes(grid_sizes[0, 1].item(), grid_sizes[0, 2].item())
+            # block_b1 = grid_sizes[0, 1]
+            # block_b2 = grid_sizes[0, 2]
             b, s, h, d = roped_query.shape
             curr_q = roped_query.view(b, -1, block_b1, block_b2, h, d)
             curr_k = kv_cache["k"][:, max(0, local_end_index - self.max_attention_size):local_end_index].view(b, -1, block_b1, block_b2, h, d)
             curr_v = kv_cache["v"][:, max(0, local_end_index - self.max_attention_size):local_end_index].view(b, -1, block_b1, block_b2, h, d)
             x = monarch_attn(curr_q, curr_k, curr_v, d ** -0.5, self.num_iters, self.eps).reshape(b, s, h, d)
 
-            # print(grid_sizes)
             kv_cache["global_end_index"].fill_(current_end)
             kv_cache["local_end_index"].fill_(local_end_index)
 
