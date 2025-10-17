@@ -224,6 +224,7 @@ class CausalWanSelfAttention(nn.Module):
 
         self.num_iters = int(os.getenv("MONARCH_ATTN_NUM_ITERS", "1"))
         self.target_sparsity = float(os.getenv("MONARCH_ATTN_TARGET_SPARSITY", "1.0"))
+        self.disable_monarch = bool(int(os.getenv("DISABLE_MONARCH_ATTN", "0")))
 
         # layers
         self.q = nn.Linear(dim, dim)
@@ -394,19 +395,21 @@ class CausalWanSelfAttention(nn.Module):
             # if kv_cache["k"].data_ptr() != ptr and dist.get_rank() == 0:
             #     print("Warning: kv_cache has been reallocated, data_ptr changed from",
             #           ptr, "to", kv_cache["k"].data_ptr())
-            # x = attention(
-            #     roped_query,
-            #     kv_cache["k"][:, max(0, local_end_index - self.max_attention_size):local_end_index],
-            #     kv_cache["v"][:, max(0, local_end_index - self.max_attention_size):local_end_index]
-            # )
-            block_b1, block_b2 = self.get_block_sizes(grid_sizes[0, 1].item(), grid_sizes[0, 2].item())
-            # block_b1 = grid_sizes[0, 1]
-            # block_b2 = grid_sizes[0, 2]
-            b, s, h, d = roped_query.shape
-            curr_q = roped_query.view(b, -1, block_b1, block_b2, h, d)
-            curr_k = kv_cache["k"][:, max(0, local_end_index - self.max_attention_size):local_end_index].view(b, -1, block_b1, block_b2, h, d)
-            curr_v = kv_cache["v"][:, max(0, local_end_index - self.max_attention_size):local_end_index].view(b, -1, block_b1, block_b2, h, d)
-            x = monarch_attn(curr_q, curr_k, curr_v, d ** -0.5, self.num_iters, self.eps).reshape(b, s, h, d)
+            if self.disable_monarch:
+                x = attention(
+                    roped_query,
+                    kv_cache["k"][:, max(0, local_end_index - self.max_attention_size):local_end_index],
+                    kv_cache["v"][:, max(0, local_end_index - self.max_attention_size):local_end_index]
+                )
+            else:
+                block_b1, block_b2 = self.get_block_sizes(grid_sizes[0, 1].item(), grid_sizes[0, 2].item())
+                # block_b1 = grid_sizes[0, 1]
+                # block_b2 = grid_sizes[0, 2]
+                b, s, h, d = roped_query.shape
+                curr_q = roped_query.view(b, -1, block_b1, block_b2, h, d)
+                curr_k = kv_cache["k"][:, max(0, local_end_index - self.max_attention_size):local_end_index].view(b, -1, block_b1, block_b2, h, d)
+                curr_v = kv_cache["v"][:, max(0, local_end_index - self.max_attention_size):local_end_index].view(b, -1, block_b1, block_b2, h, d)
+                x = monarch_attn(curr_q, curr_k, curr_v, d ** -0.5, self.num_iters, self.eps).reshape(b, s, h, d)
 
             kv_cache["global_end_index"].fill_(current_end)
             kv_cache["local_end_index"].fill_(local_end_index)
