@@ -34,9 +34,9 @@ spec:
                       - key: node.kubernetes.io/instance-type
                         operator: In
                         values:
-                          - p5.48xlarge
+                          - p5e.48xlarge
           tolerations:
-            - key: shobhvas-runtime
+            - key: a2a-evals-only-prod-p5e
               operator: Equal
               value: "True"
               effect: NoSchedule
@@ -47,7 +47,7 @@ spec:
                 - name: PYTHONUNBUFFERED
                   value: "1"
                 - name: FI_EFA_USE_DEVICE_RDMA
-                  value: '0'
+                  value: '1'
                 - name: FI_PROVIDER
                   value: efa
                 - name: NCCL_ASYNC_ERROR_HANDLING
