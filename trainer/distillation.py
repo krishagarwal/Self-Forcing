@@ -316,7 +316,7 @@ class Trainer:
     def train(self):
         start_step = self.step
 
-        while self.step <= 2000:
+        while self.step <= 800:
             if self.step % 100 == 0:
                 with torch.no_grad():
                     prompts = [
