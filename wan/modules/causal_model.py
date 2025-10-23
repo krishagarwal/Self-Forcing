@@ -245,10 +245,7 @@ class MonarchAttnImplicitFn(torch.autograd.Function):
 
         _, (grad_Q, grad_K, grad_V, grad_aR, grad_cR) = torch.autograd.functional.vjp(O_from_QKV_aR_cR, (Q, K, V, aR_star, cR_star), v=grad_out, create_graph=False, strict=True)
 
-        def aR_cR_from_aR_cR(aRcR_in):
-            aR_in = aRcR_in[:b*k*j*h*d].view(b, k, j, h, d)
-            cR_in = aRcR_in[b*k*j*h*d:].view(b, h, 1, k, j, 1)
-
+        def aR_cR_from_aR_cR(aR_in, cR_in):
             bR = torch.einsum("bkjhd,bfklhd->bhfkjl", aR_in, K)
             z = bR.to(torch.float32) * (1.0 / (cR_in + eps)).clamp_max(1e4)
             z = z - z.amax(dim=(-1, -4), keepdim=True)
@@ -264,37 +261,31 @@ class MonarchAttnImplicitFn(torch.autograd.Function):
 
             aR_out = torch.einsum("bhajki,baijhd->bkjhd", L, Q)
             cR_out = L.sum(dim=(-1, -4), dtype=torch.float32, keepdim=True).transpose(-2, -3) # (b, h, 1, k, j, 1)
-            aRcR_out = torch.cat([aR_out.flatten(), cR_out.flatten()])
-            return aRcR_out
+            return aR_out, cR_out
         
         def solve_adj_gmres2(v, lam=0.0):
-            v = torch.cat([v_i.flatten() for v_i in v])
-            aRcR_star = torch.cat([aR_star.flatten(), cR_star.flatten()])
-
             b0 = v
-            _, Ab0 = torch.autograd.functional.vjp(aR_cR_from_aR_cR, aRcR_star, v=b0, create_graph=False)
+            _, Ab0 = torch.autograd.functional.vjp(aR_cR_from_aR_cR, (aR_star, cR_star), v=b0, create_graph=False)
             b1 = Ab0
 
-            Sb0 = (1.0 + lam) * b0 - Ab0 # (I - A + λI) b0
-            _, Ab1 = torch.autograd.functional.vjp(aR_cR_from_aR_cR, aRcR_star, v=b1, create_graph=False)
-            Sb1 = (1.0 + lam) * b1 - Ab1 # (I - A + λI) b1
+            Sb0 = tuple((1.0 + lam) * b0_i - Ab0_i for b0_i, Ab0_i in zip(b0, Ab0)) # (I - A + λI) b0
+            _, Ab1 = torch.autograd.functional.vjp(aR_cR_from_aR_cR, (aR_star, cR_star), v=b1, create_graph=False)
+            Sb1 = tuple((1.0 + lam) * b1_i - Ab1_i for b1_i, Ab1_i in zip(b1, Ab1)) # (I - A + λI) b1
 
             # Build 2×2 normal equations G x = rhs
-            g00 = (Sb0.flatten() @ Sb0.flatten())
-            g01 = (Sb0.flatten() @ Sb1.flatten())
-            g11 = (Sb1.flatten() @ Sb1.flatten())
-            r0  = (v.flatten()  @ Sb0.flatten())
-            r1  = (v.flatten()  @ Sb1.flatten())
+            g00 = sum((Sb0_i.flatten() @ Sb0_i.flatten()).to(torch.float32) for Sb0_i in Sb0)
+            g01 = sum((Sb0_i.flatten() @ Sb1_i.flatten()).to(torch.float32) for Sb0_i, Sb1_i in zip(Sb0, Sb1))
+            g11 = sum((Sb1_i.flatten() @ Sb1_i.flatten()).to(torch.float32) for Sb1_i in Sb1)
+            r0  = sum((v_i.flatten() @ Sb0_i.flatten()).to(torch.float32) for v_i, Sb0_i in zip(v, Sb0))
+            r1  = sum((v_i.flatten() @ Sb1_i.flatten()).to(torch.float32) for v_i, Sb1_i in zip(v, Sb1))
 
             # Solve small SPD system safely
             det = (g00 * g11 - g01 * g01).clamp_min(1e-20)
             x0 = ( r0 * g11 - r1 * g01) / det
             x1 = (-r0 * g01 + r1 * g00) / det
 
-            u = x0 * b0 + x1 * b1
-            u1 = u[:b*k*j*h*d].view(b, k, j, h, d)
-            u2 = u[b*k*j*h*d:].view(b, h, 1, k, j, 1)
-            return (u1, u2)
+            uaR, ucR = tuple(x0 * b0_i + x1 * b1_i for b0_i, b1_i in zip(b0, b1))
+            return (uaR.to(Q.dtype), ucR)
         
         u = solve_adj_gmres2((grad_aR, grad_cR), lam=0.00)
 
@@ -333,8 +324,6 @@ class MonarchAttnImplicitFn(torch.autograd.Function):
         grad_K = grad_K * ctx.sm_scale_sqrt
 
         return grad_Q, grad_K, grad_V, None, None, None
-
-monarch_attn = MonarchAttnImplicitFn.apply
 
 monarch_attn = MonarchAttnImplicitFn.apply
 
