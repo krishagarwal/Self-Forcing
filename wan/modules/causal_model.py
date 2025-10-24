@@ -327,7 +327,7 @@ class MonarchAttnImplicitFn(torch.autograd.Function):
 
 # monarch_attn = MonarchAttnImplicitFn.apply
 
-def monarch_attn(ctx, Q, K, V, sm_scale, num_iters, eps):
+def monarch_attn(Q, K, V, sm_scale, num_iters, eps):
     b, a, i, j, h, d = Q.shape
     block_b1, block_b2 = i, j
     k, l = block_b1, block_b2
@@ -371,6 +371,7 @@ def monarch_attn(ctx, Q, K, V, sm_scale, num_iters, eps):
     bL = torch.einsum("bjkhd,baijhd->bhajki", aL, Q)
     L = torch.softmax(bL - cL, dim=-2).to(Q.dtype)
     out = torch.einsum("bhajki,bkjhd->baijhd", L, Y)
+    return out
 
 # wan 1.3B model has a weird channel / head configurations and require max-autotune to work with flexattention
 # see https://github.com/pytorch/pytorch/issues/133254
