@@ -19,6 +19,180 @@ import torch.distributed as dist
 from einops import rearrange
 import os
 
+class MonarchAttnImplicitFn(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, Q, K, V, sm_scale, num_iters, eps):
+        b, a, i, j, h, _ = Q.shape
+        block_b1, block_b2 = i, j
+        k, l = block_b1, block_b2
+        f = K.shape[-5]
+
+        sm_scale_sqrt = sm_scale ** 0.5
+        Q = Q * sm_scale_sqrt
+        K = K * sm_scale_sqrt
+
+        aR = Q.clone().unsqueeze(-5).expand(-1, -1, f, -1, -1, -1, -1) # (b, a, f, k, j, h, d)
+        cR = torch.ones((b, h, a, f, k, j, 1), device=Q.device, dtype=Q.dtype) # (b, h, a, f, k, j, 1)
+
+        with torch.no_grad():
+            for _ in range(num_iters - 1):
+                bR = torch.einsum("bafkjhd,bfklhd->bhafkjl", aR, K)
+                z = bR.to(torch.float32) * (1.0 / (cR + eps)).clamp_max(1e4)
+                z = z - z.amax(dim=-1, keepdim=True)
+                R = torch.softmax(z, dim=-1).to(Q.dtype)
+                aL = torch.einsum("bhafkjl,bfklhd->bafjkhd", R, K)
+                logz = torch.logsumexp(z, dim=-1, keepdim=True) # (b, h, a, f, k, j, 1)
+                cL = (R * (z - logz)).sum(dim=-1, keepdim=True).transpose(-2, -3) # (b, h, a, f, j, k, 1)
+
+                bL = torch.einsum("bafjkhd,baijhd->bhafjki", aL, Q)
+                L = rearrange(bL - cL, "b h a f j k i -> b h a j i (f k)")
+                L = torch.softmax(L, dim=-1).to(Q.dtype)
+                L = rearrange(L, "b h a j i (f k) -> b h a f j k i", f=f, k=k)
+
+                aR = torch.einsum("bhafjki,baijhd->bafkjhd", L, Q) 
+                cR = L.sum(dim=-1, dtype=torch.float32).unsqueeze(-1).transpose(-2, -3) # (b, h, a, f, k, j, 1)
+        
+        bR = torch.einsum("bafkjhd,bfklhd->bhafkjl", aR, K)
+        z = bR.to(torch.float32) * (1.0 / (cR + eps)).clamp_max(1e4)
+        z = z - z.amax(dim=-1, keepdim=True)
+        R = torch.softmax(z, dim=-1).to(Q.dtype)
+        aL = torch.einsum("bhafkjl,bfklhd->bafjkhd", R, K)
+        logz = torch.logsumexp(z, dim=-1, keepdim=True) # (b, h, a, f, k, j, 1)
+        cL = (R * (z - logz)).sum(dim=-1, keepdim=True).transpose(-2, -3) # (b, h, a, f, j, k, 1)
+        Y = torch.einsum("bhafkjl,bfklhd->bafjkhd", R, V)
+
+        bL = torch.einsum("bafjkhd,baijhd->bhafjki", aL, Q)
+        L = rearrange(bL - cL, "b h a f j k i -> b h a j i (f k)")
+        L = torch.softmax(L, dim=-1).to(Q.dtype)
+        L = rearrange(L, "b h a j i (f k) -> b h a f j k i", f=f, k=k)
+
+        out = torch.einsum("bhafjki,bafjkhd->baijhd", L, Y)
+
+        ctx.save_for_backward(aR, cR, Q, K, V)
+        ctx.eps = eps
+        ctx.sm_scale_sqrt = sm_scale_sqrt
+
+        return out
+
+    @staticmethod
+    def backward(ctx, grad_out):
+        aR_star, cR_star, Q, K, V = ctx.saved_tensors
+        eps = ctx.eps
+
+        b, a, i, j, h, _ = Q.shape
+        block_b1, block_b2 = i, j
+        k, l = block_b1, block_b2
+        f = K.shape[-5]
+
+        def O_from_QKV_aR_cR(Q_in, K_in, V_in, aR_in, cR_in):
+            bR = torch.einsum("bafkjhd,bfklhd->bhafkjl", aR_in, K_in)
+            z = bR.to(torch.float32) * (1.0 / (cR_in + eps)).clamp_max(1e4)
+            z = z - z.amax(dim=-1, keepdim=True)
+            R = torch.softmax(z, dim=-1).to(Q_in.dtype)
+            aL = torch.einsum("bhafkjl,bfklhd->bafjkhd", R, K_in)
+            logz = torch.logsumexp(z, dim=-1, keepdim=True) # (b, h, a, f, k, j, 1)
+            cL = (R * (z - logz)).sum(dim=-1, keepdim=True).transpose(-2, -3) # (b, h, a, f, j, k, 1)
+            Y = torch.einsum("bhafkjl,bfklhd->bafjkhd", R, V_in)
+
+            bL = torch.einsum("bafjkhd,baijhd->bhafjki", aL, Q_in)
+            L = rearrange(bL - cL, "b h a f j k i -> b h a j i (f k)")
+            L = torch.softmax(L, dim=-1).to(Q_in.dtype)
+            L = rearrange(L, "b h a j i (f k) -> b h a f j k i", f=f, k=k)
+            out = torch.einsum("bhafjki,bafjkhd->baijhd", L, Y)
+            return out
+
+        _, (grad_Q, grad_K, grad_V, grad_aR, grad_cR) = torch.autograd.functional.vjp(O_from_QKV_aR_cR, (Q, K, V, aR_star, cR_star), v=grad_out, create_graph=False, strict=True)
+
+        def aR_cR_from_aR_cR(aRcR_in):
+            aR_in = aRcR_in[:b*a*f*k*j*h*d].view(b, a, f, k, j, h, d)
+            cR_in = aRcR_in[b*a*f*k*j*h*d:].view(b, h, a, f, k, j, 1)
+
+            bR = torch.einsum("bafkjhd,bfklhd->bhafkjl", aR_in, K)
+            z = bR.to(torch.float32) * (1.0 / (cR_in + eps)).clamp_max(1e4)
+            z = z - z.amax(dim=-1, keepdim=True)
+            R = torch.softmax(z, dim=-1).to(Q.dtype)
+            aL = torch.einsum("bhafkjl,bfklhd->bafjkhd", R, K)
+            logz = torch.logsumexp(z, dim=-1, keepdim=True) # (b, h, a, f, k, j, 1)
+            cL = (R * (z - logz)).sum(dim=-1, keepdim=True).transpose(-2, -3) # (b, h, a, f, j, k, 1)
+
+            bL = torch.einsum("bafjkhd,baijhd->bhafjki", aL, Q)
+            L = torch.softmax(bL - cL, dim=-2).to(Q.dtype)
+            L = rearrange(bL - cL, "b h a f j k i -> b h a j i (f k)")
+            L = torch.softmax(L, dim=-1).to(Q.dtype)
+            L = rearrange(L, "b h a j i (f k) -> b h a f j k i", f=f, k=k)
+
+            aR_out = torch.einsum("bhafjki,baijhd->bafkjhd", L, Q)
+            cR_out = L.sum(dim=-1, dtype=torch.float32).unsqueeze(-1).transpose(-2, -3) # (b, h, a, f, k, j, 1)
+            aRcR_out = torch.cat([aR_out.flatten(), cR_out.flatten()])
+            return aRcR_out
+        
+        def solve_adj_gmres2(v, lam=0.0):
+            v = torch.cat([v_i.flatten() for v_i in v])
+            aRcR_star = torch.cat([aR_star.flatten(), cR_star.flatten()])
+
+            b0 = v
+            _, Ab0 = torch.autograd.functional.vjp(aR_cR_from_aR_cR, aRcR_star, v=b0, create_graph=False)
+            b1 = Ab0
+
+            Sb0 = (1.0 + lam) * b0 - Ab0 # (I - A + λI) b0
+            _, Ab1 = torch.autograd.functional.vjp(aR_cR_from_aR_cR, aRcR_star, v=b1, create_graph=False)
+            Sb1 = (1.0 + lam) * b1 - Ab1 # (I - A + λI) b1
+
+            # Build 2×2 normal equations G x = rhs
+            g00 = (Sb0.flatten() @ Sb0.flatten())
+            g01 = (Sb0.flatten() @ Sb1.flatten())
+            g11 = (Sb1.flatten() @ Sb1.flatten())
+            r0  = (v.flatten()  @ Sb0.flatten())
+            r1  = (v.flatten()  @ Sb1.flatten())
+
+            # Solve small SPD system safely
+            det = (g00 * g11 - g01 * g01).clamp_min(1e-20)
+            x0 = ( r0 * g11 - r1 * g01) / det
+            x1 = (-r0 * g01 + r1 * g00) / det
+
+            u = x0 * b0 + x1 * b1
+            u1 = u[:b*a*f*k*j*h*d].view(b, a, f, k, j, h, d)
+            u2 = u[b*a*f*k*j*h*d:].view(b, h, a, f, k, j, 1)
+            return (u1, u2)
+        
+        u = solve_adj_gmres2((grad_aR, grad_cR), lam=0.00)
+
+        # r = (grad_aR.clone(), grad_cR.clone())
+        # u = (torch.zeros_like(grad_aR), torch.zeros_like(grad_cR))
+        # for _ in range(1, 10):
+        #     _, r = torch.autograd.functional.vjp(aR_cR_from_aR_cR, (aR_star, cR_star), v=r, create_graph=False)
+        #     u = tuple(a + b for a, b in zip(u, r))
+
+        def aR_cR_from_QK(Q_in, K_in):
+            bR = torch.einsum("bafkjhd,bfklhd->bhafkjl", aR_star, K_in)
+            z = bR.to(torch.float32) * (1.0 / (cR_star + eps)).clamp_max(1e4)
+            z = z - z.amax(dim=-1, keepdim=True)
+            R = torch.softmax(z, dim=-1).to(Q_in.dtype)
+            aL = torch.einsum("bhafkjl,bfklhd->bafjkhd", R, K_in)
+            logz = torch.logsumexp(z, dim=-1, keepdim=True) # (b, h, a, f, k, j, 1)
+            cL = (R * (z - logz)).sum(dim=-1, keepdim=True).transpose(-2, -3) # (b, h, a, f, j, k, 1)
+
+            bL = torch.einsum("bafjkhd,baijhd->bhafjki", aL, Q_in)
+            L = rearrange(bL - cL, "b h a f j k i -> b h a j i (f k)")
+            L = torch.softmax(L, dim=-1).to(Q_in.dtype)
+            L = rearrange(L, "b h a j i (f k) -> b h a f j k i", f=f, k=k)
+
+            aR_out = torch.einsum("bhafjki,baijhd->bafkjhd", L, Q_in)
+            cR_out = L.sum(dim=-1, dtype=torch.float32).unsqueeze(-1).transpose(-2, -3) # (b, h, a, f, k, j, 1)
+            return aR_out, cR_out
+
+        _, (grad_Q_arcr, grad_K_arcr) = torch.autograd.functional.vjp(
+            aR_cR_from_QK, (Q, K), v=u, create_graph=False, strict=True
+        )
+
+        grad_Q += grad_Q_arcr
+        grad_K += grad_K_arcr
+
+        grad_Q = grad_Q * ctx.sm_scale_sqrt
+        grad_K = grad_K * ctx.sm_scale_sqrt
+
+        return grad_Q, grad_K, grad_V, None, None, None
+
 # class MonarchAttnImplicitFn(torch.autograd.Function):
 #     @staticmethod
 #     def forward(ctx, Q, K, V, sm_scale, num_iters, eps):
@@ -163,215 +337,215 @@ import os
 #         return grad_Q, grad_K, grad_V, None, None, None
 
 
-class MonarchAttnImplicitFn(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, Q, K, V, sm_scale, num_iters, eps):
-        b, a, i, j, h, d = Q.shape
-        block_b1, block_b2 = i, j
-        k, l = block_b1, block_b2
-        f = K.size(-5)
+# class MonarchAttnImplicitFn(torch.autograd.Function):
+#     @staticmethod
+#     def forward(ctx, Q, K, V, sm_scale, num_iters, eps):
+#         b, a, i, j, h, d = Q.shape
+#         block_b1, block_b2 = i, j
+#         k, l = block_b1, block_b2
+#         f = K.size(-5)
 
-        sm_scale_sqrt = sm_scale ** 0.5
-        Q = Q * sm_scale_sqrt
-        K = K * sm_scale_sqrt
+#         sm_scale_sqrt = sm_scale ** 0.5
+#         Q = Q * sm_scale_sqrt
+#         K = K * sm_scale_sqrt
 
-        aR = Q.sum(-5)
-        cR = torch.full((b, h, 1, k, j, 1), fill_value=a, device=Q.device, dtype=torch.float32)
+#         aR = Q.sum(-5)
+#         cR = torch.full((b, h, 1, k, j, 1), fill_value=a, device=Q.device, dtype=torch.float32)
 
-        with torch.no_grad():
-            for _ in range(num_iters - 1):
-                bR = torch.einsum("bkjhd,bfklhd->bhfkjl", aR, K)
-                z = bR.to(torch.float32) * (1.0 / (cR + eps)).clamp_max(1e4)
-                z = z - z.amax(dim=(-1, -4), keepdim=True)
-                R = rearrange(z, 'b h f k j l -> b h k j (f l)')
-                R = torch.softmax(R, dim=-1).to(Q.dtype)
-                R = rearrange(R, 'b h k j (f l) -> b h f k j l', f=f, l=block_b2)
-                aL = torch.einsum("bhfkjl,bfklhd->bjkhd", R, K)
-                logz = torch.logsumexp(z, dim=(-1, -4), keepdim=True) # (b, h, 1, k, j, 1)
-                cL = (R * (z - logz)).sum(dim=(-1, -4), keepdim=True).transpose(-2, -3) # (b, h, 1, j, k, 1)
+#         with torch.no_grad():
+#             for _ in range(num_iters - 1):
+#                 bR = torch.einsum("bkjhd,bfklhd->bhfkjl", aR, K)
+#                 z = bR.to(torch.float32) * (1.0 / (cR + eps)).clamp_max(1e4)
+#                 z = z - z.amax(dim=(-1, -4), keepdim=True)
+#                 R = rearrange(z, 'b h f k j l -> b h k j (f l)')
+#                 R = torch.softmax(R, dim=-1).to(Q.dtype)
+#                 R = rearrange(R, 'b h k j (f l) -> b h f k j l', f=f, l=block_b2)
+#                 aL = torch.einsum("bhfkjl,bfklhd->bjkhd", R, K)
+#                 logz = torch.logsumexp(z, dim=(-1, -4), keepdim=True) # (b, h, 1, k, j, 1)
+#                 cL = (R * (z - logz)).sum(dim=(-1, -4), keepdim=True).transpose(-2, -3) # (b, h, 1, j, k, 1)
                 
-                bL = torch.einsum("bjkhd,baijhd->bhajki", aL, Q)
-                L = torch.softmax(bL - cL, dim=-2).to(Q.dtype)
-                aR = torch.einsum("bhajki,baijhd->bkjhd", L, Q)
-                cR = L.sum(dim=(-1, -4), dtype=torch.float32, keepdim=True).transpose(-2, -3) # (b, h, 1, k, j, 1)
+#                 bL = torch.einsum("bjkhd,baijhd->bhajki", aL, Q)
+#                 L = torch.softmax(bL - cL, dim=-2).to(Q.dtype)
+#                 aR = torch.einsum("bhajki,baijhd->bkjhd", L, Q)
+#                 cR = L.sum(dim=(-1, -4), dtype=torch.float32, keepdim=True).transpose(-2, -3) # (b, h, 1, k, j, 1)
             
-        bR = torch.einsum("bkjhd,bfklhd->bhfkjl", aR, K)
-        z = bR.to(torch.float32) * (1.0 / (cR + eps)).clamp_max(1e4)
-        z = z - z.amax(dim=(-1, -4), keepdim=True)
-        R = rearrange(z, 'b h f k j l -> b h k j (f l)')
-        R = torch.softmax(R, dim=-1).to(Q.dtype)
-        R = rearrange(R, 'b h k j (f l) -> b h f k j l', f=f, l=block_b2)
-        aL = torch.einsum("bhfkjl,bfklhd->bjkhd", R, K)
-        logz = torch.logsumexp(z, dim=(-1, -4), keepdim=True) # (b, h, 1, k, j, 1)
-        cL = (R * (z - logz)).sum(dim=(-1, -4), keepdim=True).transpose(-2, -3) # (b, h, 1, j, k, 1)
-        Y = torch.einsum("bhfkjl,bfklhd->bkjhd", R, V)
+#         bR = torch.einsum("bkjhd,bfklhd->bhfkjl", aR, K)
+#         z = bR.to(torch.float32) * (1.0 / (cR + eps)).clamp_max(1e4)
+#         z = z - z.amax(dim=(-1, -4), keepdim=True)
+#         R = rearrange(z, 'b h f k j l -> b h k j (f l)')
+#         R = torch.softmax(R, dim=-1).to(Q.dtype)
+#         R = rearrange(R, 'b h k j (f l) -> b h f k j l', f=f, l=block_b2)
+#         aL = torch.einsum("bhfkjl,bfklhd->bjkhd", R, K)
+#         logz = torch.logsumexp(z, dim=(-1, -4), keepdim=True) # (b, h, 1, k, j, 1)
+#         cL = (R * (z - logz)).sum(dim=(-1, -4), keepdim=True).transpose(-2, -3) # (b, h, 1, j, k, 1)
+#         Y = torch.einsum("bhfkjl,bfklhd->bkjhd", R, V)
 
-        bL = torch.einsum("bjkhd,baijhd->bhajki", aL, Q)
-        L = torch.softmax(bL - cL, dim=-2).to(Q.dtype)
-        out = torch.einsum("bhajki,bkjhd->baijhd", L, Y)
+#         bL = torch.einsum("bjkhd,baijhd->bhajki", aL, Q)
+#         L = torch.softmax(bL - cL, dim=-2).to(Q.dtype)
+#         out = torch.einsum("bhajki,bkjhd->baijhd", L, Y)
 
-        ctx.save_for_backward(aR, cR, Q, K, V)
-        ctx.eps = eps
-        ctx.sm_scale_sqrt = sm_scale_sqrt
+#         ctx.save_for_backward(aR, cR, Q, K, V)
+#         ctx.eps = eps
+#         ctx.sm_scale_sqrt = sm_scale_sqrt
         
-        return out
+#         return out
 
-    @staticmethod
-    def backward(ctx, grad_out):
-        aR_star, cR_star, Q, K, V = ctx.saved_tensors
-        eps = ctx.eps
+#     @staticmethod
+#     def backward(ctx, grad_out):
+#         aR_star, cR_star, Q, K, V = ctx.saved_tensors
+#         eps = ctx.eps
 
-        b, a, i, j, h, d = Q.shape
-        block_b1, block_b2 = i, j
-        k, l = block_b1, block_b2
-        f = K.shape[-5]
+#         b, a, i, j, h, d = Q.shape
+#         block_b1, block_b2 = i, j
+#         k, l = block_b1, block_b2
+#         f = K.shape[-5]
 
-        def O_from_QKV_aR_cR(Q_in, K_in, V_in, aR_in, cR_in):
-            bR = torch.einsum("bkjhd,bfklhd->bhfkjl", aR_in, K_in)
-            z = bR.to(torch.float32) * (1.0 / (cR_in + eps)).clamp_max(1e4)
-            z = z - z.amax(dim=(-1, -4), keepdim=True)
-            R = rearrange(z, 'b h f k j l -> b h k j (f l)')
-            R = torch.softmax(R, dim=-1).to(Q_in.dtype)
-            R = rearrange(R, 'b h k j (f l) -> b h f k j l', f=f, l=block_b2)
-            aL = torch.einsum("bhfkjl,bfklhd->bjkhd", R, K_in)
-            logz = torch.logsumexp(z, dim=(-1, -4), keepdim=True) # (b, h, 1, k, j, 1)
-            cL = (R * (z - logz)).sum(dim=(-1, -4), keepdim=True).transpose(-2, -3) # (b, h, 1, j, k, 1)
-            Y = torch.einsum("bhfkjl,bfklhd->bkjhd", R, V_in)
+#         def O_from_QKV_aR_cR(Q_in, K_in, V_in, aR_in, cR_in):
+#             bR = torch.einsum("bkjhd,bfklhd->bhfkjl", aR_in, K_in)
+#             z = bR.to(torch.float32) * (1.0 / (cR_in + eps)).clamp_max(1e4)
+#             z = z - z.amax(dim=(-1, -4), keepdim=True)
+#             R = rearrange(z, 'b h f k j l -> b h k j (f l)')
+#             R = torch.softmax(R, dim=-1).to(Q_in.dtype)
+#             R = rearrange(R, 'b h k j (f l) -> b h f k j l', f=f, l=block_b2)
+#             aL = torch.einsum("bhfkjl,bfklhd->bjkhd", R, K_in)
+#             logz = torch.logsumexp(z, dim=(-1, -4), keepdim=True) # (b, h, 1, k, j, 1)
+#             cL = (R * (z - logz)).sum(dim=(-1, -4), keepdim=True).transpose(-2, -3) # (b, h, 1, j, k, 1)
+#             Y = torch.einsum("bhfkjl,bfklhd->bkjhd", R, V_in)
 
-            bL = torch.einsum("bjkhd,baijhd->bhajki", aL, Q_in)
-            L = torch.softmax(bL - cL, dim=-2).to(Q_in.dtype)
-            out = torch.einsum("bhajki,bkjhd->baijhd", L, Y)
-            return out
+#             bL = torch.einsum("bjkhd,baijhd->bhajki", aL, Q_in)
+#             L = torch.softmax(bL - cL, dim=-2).to(Q_in.dtype)
+#             out = torch.einsum("bhajki,bkjhd->baijhd", L, Y)
+#             return out
 
-        _, (grad_Q, grad_K, grad_V, grad_aR, grad_cR) = torch.autograd.functional.vjp(O_from_QKV_aR_cR, (Q, K, V, aR_star, cR_star), v=grad_out, create_graph=False, strict=True)
+#         _, (grad_Q, grad_K, grad_V, grad_aR, grad_cR) = torch.autograd.functional.vjp(O_from_QKV_aR_cR, (Q, K, V, aR_star, cR_star), v=grad_out, create_graph=False, strict=True)
 
-        def aR_cR_from_aR_cR(aR_in, cR_in):
-            bR = torch.einsum("bkjhd,bfklhd->bhfkjl", aR_in, K)
-            z = bR.to(torch.float32) * (1.0 / (cR_in + eps)).clamp_max(1e4)
-            z = z - z.amax(dim=(-1, -4), keepdim=True)
-            R = rearrange(z, 'b h f k j l -> b h k j (f l)')
-            R = torch.softmax(R, dim=-1).to(Q.dtype)
-            R = rearrange(R, 'b h k j (f l) -> b h f k j l', f=f, l=block_b2)
-            aL = torch.einsum("bhfkjl,bfklhd->bjkhd", R, K)
-            logz = torch.logsumexp(z, dim=(-1, -4), keepdim=True) # (b, h, 1, k, j, 1)
-            cL = (R * (z - logz)).sum(dim=(-1, -4), keepdim=True).transpose(-2, -3) # (b, h, 1, j, k, 1)
+#         def aR_cR_from_aR_cR(aR_in, cR_in):
+#             bR = torch.einsum("bkjhd,bfklhd->bhfkjl", aR_in, K)
+#             z = bR.to(torch.float32) * (1.0 / (cR_in + eps)).clamp_max(1e4)
+#             z = z - z.amax(dim=(-1, -4), keepdim=True)
+#             R = rearrange(z, 'b h f k j l -> b h k j (f l)')
+#             R = torch.softmax(R, dim=-1).to(Q.dtype)
+#             R = rearrange(R, 'b h k j (f l) -> b h f k j l', f=f, l=block_b2)
+#             aL = torch.einsum("bhfkjl,bfklhd->bjkhd", R, K)
+#             logz = torch.logsumexp(z, dim=(-1, -4), keepdim=True) # (b, h, 1, k, j, 1)
+#             cL = (R * (z - logz)).sum(dim=(-1, -4), keepdim=True).transpose(-2, -3) # (b, h, 1, j, k, 1)
 
-            bL = torch.einsum("bjkhd,baijhd->bhajki", aL, Q)
-            L = torch.softmax(bL - cL, dim=-2).to(Q.dtype)
+#             bL = torch.einsum("bjkhd,baijhd->bhajki", aL, Q)
+#             L = torch.softmax(bL - cL, dim=-2).to(Q.dtype)
 
-            aR_out = torch.einsum("bhajki,baijhd->bkjhd", L, Q)
-            cR_out = L.sum(dim=(-1, -4), dtype=torch.float32, keepdim=True).transpose(-2, -3) # (b, h, 1, k, j, 1)
-            return aR_out, cR_out
+#             aR_out = torch.einsum("bhajki,baijhd->bkjhd", L, Q)
+#             cR_out = L.sum(dim=(-1, -4), dtype=torch.float32, keepdim=True).transpose(-2, -3) # (b, h, 1, k, j, 1)
+#             return aR_out, cR_out
         
-        def solve_adj_gmres2(v, lam=0.0):
-            b0 = v
-            _, Ab0 = torch.autograd.functional.vjp(aR_cR_from_aR_cR, (aR_star, cR_star), v=b0, create_graph=False)
-            b1 = Ab0
+#         def solve_adj_gmres2(v, lam=0.0):
+#             b0 = v
+#             _, Ab0 = torch.autograd.functional.vjp(aR_cR_from_aR_cR, (aR_star, cR_star), v=b0, create_graph=False)
+#             b1 = Ab0
 
-            Sb0 = tuple((1.0 + lam) * b0_i - Ab0_i for b0_i, Ab0_i in zip(b0, Ab0)) # (I - A + λI) b0
-            _, Ab1 = torch.autograd.functional.vjp(aR_cR_from_aR_cR, (aR_star, cR_star), v=b1, create_graph=False)
-            Sb1 = tuple((1.0 + lam) * b1_i - Ab1_i for b1_i, Ab1_i in zip(b1, Ab1)) # (I - A + λI) b1
+#             Sb0 = tuple((1.0 + lam) * b0_i - Ab0_i for b0_i, Ab0_i in zip(b0, Ab0)) # (I - A + λI) b0
+#             _, Ab1 = torch.autograd.functional.vjp(aR_cR_from_aR_cR, (aR_star, cR_star), v=b1, create_graph=False)
+#             Sb1 = tuple((1.0 + lam) * b1_i - Ab1_i for b1_i, Ab1_i in zip(b1, Ab1)) # (I - A + λI) b1
 
-            # Build 2×2 normal equations G x = rhs
-            g00 = sum((Sb0_i.flatten() @ Sb0_i.flatten()).to(torch.float32) for Sb0_i in Sb0)
-            g01 = sum((Sb0_i.flatten() @ Sb1_i.flatten()).to(torch.float32) for Sb0_i, Sb1_i in zip(Sb0, Sb1))
-            g11 = sum((Sb1_i.flatten() @ Sb1_i.flatten()).to(torch.float32) for Sb1_i in Sb1)
-            r0  = sum((v_i.flatten() @ Sb0_i.flatten()).to(torch.float32) for v_i, Sb0_i in zip(v, Sb0))
-            r1  = sum((v_i.flatten() @ Sb1_i.flatten()).to(torch.float32) for v_i, Sb1_i in zip(v, Sb1))
+#             # Build 2×2 normal equations G x = rhs
+#             g00 = sum((Sb0_i.flatten() @ Sb0_i.flatten()).to(torch.float32) for Sb0_i in Sb0)
+#             g01 = sum((Sb0_i.flatten() @ Sb1_i.flatten()).to(torch.float32) for Sb0_i, Sb1_i in zip(Sb0, Sb1))
+#             g11 = sum((Sb1_i.flatten() @ Sb1_i.flatten()).to(torch.float32) for Sb1_i in Sb1)
+#             r0  = sum((v_i.flatten() @ Sb0_i.flatten()).to(torch.float32) for v_i, Sb0_i in zip(v, Sb0))
+#             r1  = sum((v_i.flatten() @ Sb1_i.flatten()).to(torch.float32) for v_i, Sb1_i in zip(v, Sb1))
 
-            # Solve small SPD system safely
-            det = (g00 * g11 - g01 * g01).clamp_min(1e-20)
-            x0 = ( r0 * g11 - r1 * g01) / det
-            x1 = (-r0 * g01 + r1 * g00) / det
+#             # Solve small SPD system safely
+#             det = (g00 * g11 - g01 * g01).clamp_min(1e-20)
+#             x0 = ( r0 * g11 - r1 * g01) / det
+#             x1 = (-r0 * g01 + r1 * g00) / det
 
-            uaR, ucR = tuple(x0 * b0_i + x1 * b1_i for b0_i, b1_i in zip(b0, b1))
-            return (uaR.to(Q.dtype), ucR)
+#             uaR, ucR = tuple(x0 * b0_i + x1 * b1_i for b0_i, b1_i in zip(b0, b1))
+#             return (uaR.to(Q.dtype), ucR)
         
-        u = solve_adj_gmres2((grad_aR, grad_cR), lam=0.00)
+#         u = solve_adj_gmres2((grad_aR, grad_cR), lam=0.00)
 
-        # r = (grad_aR.clone(), grad_cR.clone())
-        # u = r
-        # for _ in range(1, 1):
-        #     _, r = torch.autograd.functional.vjp(aR_cR_from_aR_cR, (aR_star, cR_star), v=r, create_graph=False)
-        #     u = tuple(a + b for a, b in zip(u, r))
+#         # r = (grad_aR.clone(), grad_cR.clone())
+#         # u = r
+#         # for _ in range(1, 1):
+#         #     _, r = torch.autograd.functional.vjp(aR_cR_from_aR_cR, (aR_star, cR_star), v=r, create_graph=False)
+#         #     u = tuple(a + b for a, b in zip(u, r))
 
-        def aR_cR_from_QK(Q_in, K_in):
-            bR = torch.einsum("bkjhd,bfklhd->bhfkjl", aR_star, K_in)
-            z = bR.to(torch.float32) * (1.0 / (cR_star + eps)).clamp_max(1e4)
-            z = z - z.amax(dim=(-1, -4), keepdim=True)
-            R = rearrange(z, 'b h f k j l -> b h k j (f l)')
-            R = torch.softmax(R, dim=-1).to(Q_in.dtype)
-            R = rearrange(R, 'b h k j (f l) -> b h f k j l', f=f, l=block_b2)
-            aL = torch.einsum("bhfkjl,bfklhd->bjkhd", R, K_in)
-            logz = torch.logsumexp(z, dim=(-1, -4), keepdim=True) # (b, h, 1, k, j, 1)
-            cL = (R * (z - logz)).sum(dim=(-1, -4), keepdim=True).transpose(-2, -3) # (b, h, 1, j, k, 1)
+#         def aR_cR_from_QK(Q_in, K_in):
+#             bR = torch.einsum("bkjhd,bfklhd->bhfkjl", aR_star, K_in)
+#             z = bR.to(torch.float32) * (1.0 / (cR_star + eps)).clamp_max(1e4)
+#             z = z - z.amax(dim=(-1, -4), keepdim=True)
+#             R = rearrange(z, 'b h f k j l -> b h k j (f l)')
+#             R = torch.softmax(R, dim=-1).to(Q_in.dtype)
+#             R = rearrange(R, 'b h k j (f l) -> b h f k j l', f=f, l=block_b2)
+#             aL = torch.einsum("bhfkjl,bfklhd->bjkhd", R, K_in)
+#             logz = torch.logsumexp(z, dim=(-1, -4), keepdim=True) # (b, h, 1, k, j, 1)
+#             cL = (R * (z - logz)).sum(dim=(-1, -4), keepdim=True).transpose(-2, -3) # (b, h, 1, j, k, 1)
 
-            bL = torch.einsum("bjkhd,baijhd->bhajki", aL, Q_in)
-            L = torch.softmax(bL - cL, dim=-2).to(Q_in.dtype)
+#             bL = torch.einsum("bjkhd,baijhd->bhajki", aL, Q_in)
+#             L = torch.softmax(bL - cL, dim=-2).to(Q_in.dtype)
 
-            aR_out = torch.einsum("bhajki,baijhd->bkjhd", L, Q_in)
-            cR_out = L.sum(dim=(-1, -4), dtype=torch.float32, keepdim=True).transpose(-2, -3) # (b, h, 1, k, j, 1)
-            return aR_out, cR_out
+#             aR_out = torch.einsum("bhajki,baijhd->bkjhd", L, Q_in)
+#             cR_out = L.sum(dim=(-1, -4), dtype=torch.float32, keepdim=True).transpose(-2, -3) # (b, h, 1, k, j, 1)
+#             return aR_out, cR_out
 
-        _, (grad_Q_arcr, grad_K_arcr) = torch.autograd.functional.vjp(
-            aR_cR_from_QK, (Q, K), v=u, create_graph=False, strict=True
-        )
+#         _, (grad_Q_arcr, grad_K_arcr) = torch.autograd.functional.vjp(
+#             aR_cR_from_QK, (Q, K), v=u, create_graph=False, strict=True
+#         )
 
-        grad_Q += grad_Q_arcr
-        grad_K += grad_K_arcr
+#         grad_Q += grad_Q_arcr
+#         grad_K += grad_K_arcr
 
-        grad_Q = grad_Q * ctx.sm_scale_sqrt
-        grad_K = grad_K * ctx.sm_scale_sqrt
+#         grad_Q = grad_Q * ctx.sm_scale_sqrt
+#         grad_K = grad_K * ctx.sm_scale_sqrt
 
-        return grad_Q, grad_K, grad_V, None, None, None
+#         return grad_Q, grad_K, grad_V, None, None, None
 
-# monarch_attn = MonarchAttnImplicitFn.apply
+monarch_attn = MonarchAttnImplicitFn.apply
 
-def monarch_attn(Q, K, V, sm_scale, num_iters, eps):
-    b, a, i, j, h, d = Q.shape
-    block_b1, block_b2 = i, j
-    k, l = block_b1, block_b2
-    f = K.size(-5)
+# def monarch_attn(Q, K, V, sm_scale, num_iters, eps):
+#     b, a, i, j, h, d = Q.shape
+#     block_b1, block_b2 = i, j
+#     k, l = block_b1, block_b2
+#     f = K.size(-5)
 
-    sm_scale_sqrt = sm_scale ** 0.5
-    Q = Q * sm_scale_sqrt
-    K = K * sm_scale_sqrt
+#     sm_scale_sqrt = sm_scale ** 0.5
+#     Q = Q * sm_scale_sqrt
+#     K = K * sm_scale_sqrt
 
-    aR = Q.sum(-5)
-    cR = torch.full((b, h, 1, k, j, 1), fill_value=a, device=Q.device, dtype=torch.float32)
+#     aR = Q.sum(-5)
+#     cR = torch.full((b, h, 1, k, j, 1), fill_value=a, device=Q.device, dtype=torch.float32)
 
-    with torch.no_grad():
-        for _ in range(num_iters - 1):
-            bR = torch.einsum("bkjhd,bfklhd->bhfkjl", aR, K)
-            z = bR.to(torch.float32) * (1.0 / (cR + eps)).clamp_max(1e4)
-            z = z - z.amax(dim=(-1, -4), keepdim=True)
-            R = rearrange(z, 'b h f k j l -> b h k j (f l)')
-            R = torch.softmax(R, dim=-1).to(Q.dtype)
-            R = rearrange(R, 'b h k j (f l) -> b h f k j l', f=f, l=block_b2)
-            aL = torch.einsum("bhfkjl,bfklhd->bjkhd", R, K)
-            logz = torch.logsumexp(z, dim=(-1, -4), keepdim=True) # (b, h, 1, k, j, 1)
-            cL = (R * (z - logz)).sum(dim=(-1, -4), keepdim=True).transpose(-2, -3) # (b, h, 1, j, k, 1)
+#     with torch.no_grad():
+#         for _ in range(num_iters - 1):
+#             bR = torch.einsum("bkjhd,bfklhd->bhfkjl", aR, K)
+#             z = bR.to(torch.float32) * (1.0 / (cR + eps)).clamp_max(1e4)
+#             z = z - z.amax(dim=(-1, -4), keepdim=True)
+#             R = rearrange(z, 'b h f k j l -> b h k j (f l)')
+#             R = torch.softmax(R, dim=-1).to(Q.dtype)
+#             R = rearrange(R, 'b h k j (f l) -> b h f k j l', f=f, l=block_b2)
+#             aL = torch.einsum("bhfkjl,bfklhd->bjkhd", R, K)
+#             logz = torch.logsumexp(z, dim=(-1, -4), keepdim=True) # (b, h, 1, k, j, 1)
+#             cL = (R * (z - logz)).sum(dim=(-1, -4), keepdim=True).transpose(-2, -3) # (b, h, 1, j, k, 1)
             
-            bL = torch.einsum("bjkhd,baijhd->bhajki", aL, Q)
-            L = torch.softmax(bL - cL, dim=-2).to(Q.dtype)
-            aR = torch.einsum("bhajki,baijhd->bkjhd", L, Q)
-            cR = L.sum(dim=(-1, -4), dtype=torch.float32, keepdim=True).transpose(-2, -3) # (b, h, 1, k, j, 1)
+#             bL = torch.einsum("bjkhd,baijhd->bhajki", aL, Q)
+#             L = torch.softmax(bL - cL, dim=-2).to(Q.dtype)
+#             aR = torch.einsum("bhajki,baijhd->bkjhd", L, Q)
+#             cR = L.sum(dim=(-1, -4), dtype=torch.float32, keepdim=True).transpose(-2, -3) # (b, h, 1, k, j, 1)
         
-    bR = torch.einsum("bkjhd,bfklhd->bhfkjl", aR, K)
-    z = bR.to(torch.float32) * (1.0 / (cR + eps)).clamp_max(1e4)
-    z = z - z.amax(dim=(-1, -4), keepdim=True)
-    R = rearrange(z, 'b h f k j l -> b h k j (f l)')
-    R = torch.softmax(R, dim=-1).to(Q.dtype)
-    R = rearrange(R, 'b h k j (f l) -> b h f k j l', f=f, l=block_b2)
-    aL = torch.einsum("bhfkjl,bfklhd->bjkhd", R, K)
-    logz = torch.logsumexp(z, dim=(-1, -4), keepdim=True) # (b, h, 1, k, j, 1)
-    cL = (R * (z - logz)).sum(dim=(-1, -4), keepdim=True).transpose(-2, -3) # (b, h, 1, j, k, 1)
-    Y = torch.einsum("bhfkjl,bfklhd->bkjhd", R, V)
+#     bR = torch.einsum("bkjhd,bfklhd->bhfkjl", aR, K)
+#     z = bR.to(torch.float32) * (1.0 / (cR + eps)).clamp_max(1e4)
+#     z = z - z.amax(dim=(-1, -4), keepdim=True)
+#     R = rearrange(z, 'b h f k j l -> b h k j (f l)')
+#     R = torch.softmax(R, dim=-1).to(Q.dtype)
+#     R = rearrange(R, 'b h k j (f l) -> b h f k j l', f=f, l=block_b2)
+#     aL = torch.einsum("bhfkjl,bfklhd->bjkhd", R, K)
+#     logz = torch.logsumexp(z, dim=(-1, -4), keepdim=True) # (b, h, 1, k, j, 1)
+#     cL = (R * (z - logz)).sum(dim=(-1, -4), keepdim=True).transpose(-2, -3) # (b, h, 1, j, k, 1)
+#     Y = torch.einsum("bhfkjl,bfklhd->bkjhd", R, V)
 
-    bL = torch.einsum("bjkhd,baijhd->bhajki", aL, Q)
-    L = torch.softmax(bL - cL, dim=-2).to(Q.dtype)
-    out = torch.einsum("bhajki,bkjhd->baijhd", L, Y)
-    return out
+#     bL = torch.einsum("bjkhd,baijhd->bhajki", aL, Q)
+#     L = torch.softmax(bL - cL, dim=-2).to(Q.dtype)
+#     out = torch.einsum("bhajki,bkjhd->baijhd", L, Y)
+#     return out
 
 # wan 1.3B model has a weird channel / head configurations and require max-autotune to work with flexattention
 # see https://github.com/pytorch/pytorch/issues/133254
@@ -443,7 +617,8 @@ class CausalWanSelfAttention(nn.Module):
         self.norm_q = WanRMSNorm(dim, eps=eps) if qk_norm else nn.Identity()
         self.norm_k = WanRMSNorm(dim, eps=eps) if qk_norm else nn.Identity()
 
-    def get_block_sizes(self, h, w):
+    def get_block_sizes(self, h, w, q_seq_len):
+        return (q_seq_len // w, w)
         factors = [i for i in range(1, h + 1) if h % i == 0]
         sparsities = [1 - (f*f*w + w*w*f)/(f*f*w*w) for f in factors]
         dists = [abs(s - self.target_sparsity) for s in sparsities]
@@ -611,7 +786,7 @@ class CausalWanSelfAttention(nn.Module):
                     kv_cache["v"][:, max(0, local_end_index - self.max_attention_size):local_end_index]
                 )
             else:
-                block_b1, block_b2 = self.get_block_sizes(grid_sizes[0, 1].item(), grid_sizes[0, 2].item())
+                block_b1, block_b2 = self.get_block_sizes(grid_sizes[0, 1].item(), grid_sizes[0, 2].item(), q.size(1))
                 # block_b1 = grid_sizes[0, 1]
                 # block_b2 = grid_sizes[0, 2]
                 b, s, h, d = roped_query.shape
