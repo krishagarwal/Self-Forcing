@@ -325,7 +325,52 @@ class MonarchAttnImplicitFn(torch.autograd.Function):
 
         return grad_Q, grad_K, grad_V, None, None, None
 
-monarch_attn = MonarchAttnImplicitFn.apply
+# monarch_attn = MonarchAttnImplicitFn.apply
+
+def monarch_attn(ctx, Q, K, V, sm_scale, num_iters, eps):
+    b, a, i, j, h, d = Q.shape
+    block_b1, block_b2 = i, j
+    k, l = block_b1, block_b2
+    f = K.size(-5)
+
+    sm_scale_sqrt = sm_scale ** 0.5
+    Q = Q * sm_scale_sqrt
+    K = K * sm_scale_sqrt
+
+    aR = Q.sum(-5)
+    cR = torch.full((b, h, 1, k, j, 1), fill_value=a, device=Q.device, dtype=torch.float32)
+
+    with torch.no_grad():
+        for _ in range(num_iters - 1):
+            bR = torch.einsum("bkjhd,bfklhd->bhfkjl", aR, K)
+            z = bR.to(torch.float32) * (1.0 / (cR + eps)).clamp_max(1e4)
+            z = z - z.amax(dim=(-1, -4), keepdim=True)
+            R = rearrange(z, 'b h f k j l -> b h k j (f l)')
+            R = torch.softmax(R, dim=-1).to(Q.dtype)
+            R = rearrange(R, 'b h k j (f l) -> b h f k j l', f=f, l=block_b2)
+            aL = torch.einsum("bhfkjl,bfklhd->bjkhd", R, K)
+            logz = torch.logsumexp(z, dim=(-1, -4), keepdim=True) # (b, h, 1, k, j, 1)
+            cL = (R * (z - logz)).sum(dim=(-1, -4), keepdim=True).transpose(-2, -3) # (b, h, 1, j, k, 1)
+            
+            bL = torch.einsum("bjkhd,baijhd->bhajki", aL, Q)
+            L = torch.softmax(bL - cL, dim=-2).to(Q.dtype)
+            aR = torch.einsum("bhajki,baijhd->bkjhd", L, Q)
+            cR = L.sum(dim=(-1, -4), dtype=torch.float32, keepdim=True).transpose(-2, -3) # (b, h, 1, k, j, 1)
+        
+    bR = torch.einsum("bkjhd,bfklhd->bhfkjl", aR, K)
+    z = bR.to(torch.float32) * (1.0 / (cR + eps)).clamp_max(1e4)
+    z = z - z.amax(dim=(-1, -4), keepdim=True)
+    R = rearrange(z, 'b h f k j l -> b h k j (f l)')
+    R = torch.softmax(R, dim=-1).to(Q.dtype)
+    R = rearrange(R, 'b h k j (f l) -> b h f k j l', f=f, l=block_b2)
+    aL = torch.einsum("bhfkjl,bfklhd->bjkhd", R, K)
+    logz = torch.logsumexp(z, dim=(-1, -4), keepdim=True) # (b, h, 1, k, j, 1)
+    cL = (R * (z - logz)).sum(dim=(-1, -4), keepdim=True).transpose(-2, -3) # (b, h, 1, j, k, 1)
+    Y = torch.einsum("bhfkjl,bfklhd->bkjhd", R, V)
+
+    bL = torch.einsum("bjkhd,baijhd->bhajki", aL, Q)
+    L = torch.softmax(bL - cL, dim=-2).to(Q.dtype)
+    out = torch.einsum("bhajki,bkjhd->baijhd", L, Y)
 
 # wan 1.3B model has a weird channel / head configurations and require max-autotune to work with flexattention
 # see https://github.com/pytorch/pytorch/issues/133254
