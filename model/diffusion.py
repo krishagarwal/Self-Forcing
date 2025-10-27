@@ -32,7 +32,7 @@ class CausalDiffusion(BaseModel):
         self.noise_augmentation_max_timestep = getattr(args, "noise_augmentation_max_timestep", 0)
 
     def _initialize_models(self, args):
-        self.generator = WanDiffusionWrapper(**getattr(args, "model_kwargs", {}), is_causal=True)
+        self.generator = WanDiffusionWrapper(**getattr(args, "model_kwargs", {}), is_causal=args.causal)
         self.generator.model.requires_grad_(True)
 
         self.text_encoder = WanTextEncoder()

@@ -12,6 +12,8 @@ import time
 import os
 
 from utils.distributed import EMA_FSDP, barrier, fsdp_wrap, fsdp_state_dict, launch_distributed_job
+from torchvision.io import write_video
+from pipeline import CausalInferencePipeline, BidirectionalDiffusionInferencePipeline
 
 
 class Trainer:
@@ -41,12 +43,12 @@ class Trainer:
         set_seed(config.seed + global_rank)
 
         if self.is_main_process and not self.disable_wandb:
-            wandb.login(host=config.wandb_host, key=config.wandb_key)
+            # wandb.login(host=config.wandb_host, key=config.wandb_key)
             wandb.init(
                 config=OmegaConf.to_container(config, resolve=True),
                 name=config.config_name,
                 mode="online",
-                entity=config.wandb_entity,
+                # entity=config.wandb_entity,
                 project=config.wandb_project,
                 dir=config.wandb_save_dir
             )
@@ -119,7 +121,12 @@ class Trainer:
         # 7. (If resuming) Load the model and optimizer, lr_scheduler, ema's statedicts
         if getattr(config, "generator_ckpt", False):
             print(f"Loading pretrained generator from {config.generator_ckpt}")
-            state_dict = torch.load(config.generator_ckpt, map_location="cpu")
+            if config.generator_ckpt.endswith(".safetensors"):
+                from safetensors.torch import load_file
+                state_dict = load_file(config.generator_ckpt, device="cpu")
+                state_dict = {f"model.{k}" : v for k, v in state_dict.items()}
+            else:
+                state_dict = torch.load(config.generator_ckpt, map_location="cpu")
             if "generator" in state_dict:
                 state_dict = state_dict["generator"]
             elif "model" in state_dict:
@@ -136,6 +143,11 @@ class Trainer:
 
         self.max_grad_norm = 10.0
         self.previous_time = None
+
+        if self.causal:
+            self.val_pipeline = CausalInferencePipeline(config, self.device, generator=self.model.generator, text_encoder=self.model.text_encoder, vae=self.model.vae)
+        else:
+            self.val_pipeline = BidirectionalDiffusionInferencePipeline(config, self.device, generator=self.model.generator, text_encoder=self.model.text_encoder, vae=self.model.vae)
 
     def save(self):
         print("Start gathering distributed model states...")
@@ -235,7 +247,7 @@ class Trainer:
     def generate_video(self, pipeline, prompts, image=None):
         batch_size = len(prompts)
         sampled_noise = torch.randn(
-            [batch_size, 21, 16, 60, 104], device="cuda", dtype=self.dtype
+            [batch_size, self.model.num_training_frames, 16, 60, 104], device="cuda", dtype=self.dtype
         )
         video, _ = pipeline.inference(
             noise=sampled_noise,
@@ -246,10 +258,38 @@ class Trainer:
         return current_video
 
     def train(self):
-        while True:
+        start_step = self.step
+
+        while self.step <= 1000:
+            if self.step % 100 == 0:
+                with torch.no_grad():
+                    prompts = [
+                        "A movie trailer featuring the adventures of the 30 year old space man wearing a red wool knitted motorcycle helmet, blue sky, salt desert, cinematic style, shot on 35mm film, vivid colors.",
+                        "The camera rotates around a large stack of vintage televisions all showing different programs — 1950s sci-fi movies, horror movies, news, static, a 1970s sitcom, etc, set inside a large New York museum gallery.",
+                        "A white and orange tabby cat is seen happily darting through a dense garden, as if chasing something. Its eyes are wide and happy as it jogs forward, scanning the branches, flowers, and leaves as it walks. The path is narrow as it makes its way between all the plants. the scene is captured from a ground-level angle, following the cat closely, giving a low and intimate perspective. The image is cinematic with warm tones and a grainy texture. The scattered daylight between the leaves and plants above creates a warm contrast, accentuating the cat’s orange fur. The shot is clear and sharp, with a shallow depth of field.",
+                        "A stylish woman walks down a Tokyo street filled with warm glowing neon and animated city signage. She wears a black leather jacket, a long red dress, and black boots, and carries a black purse. She wears sunglasses and red lipstick. She walks confidently and casually. The street is damp and reflective, creating a mirror effect of the colorful lights. Many pedestrians walk about.",
+                    ]
+                    validation = self.generate_video(
+                        self.val_pipeline,
+                        prompts=prompts,
+                    )
+                    if self.is_main_process and not self.disable_wandb:
+                        filenames = []
+                        for i, _ in enumerate(prompts):
+                            filename = f"/workspace/temp_{self.step}_{i}.mp4"
+                            write_video(filename, validation[i], fps=16)
+                            filenames.append(filename)
+                        logs = {
+                            f"validation_videos": [
+                                wandb.Video(filename, caption=prompt)
+                                for filename, prompt in zip(filenames, prompts)
+                            ]
+                        }
+                        wandb.log(logs, step=self.step)
+
             batch = next(self.dataloader)
             self.train_one_step(batch)
-            if (not self.config.no_save) and self.step % self.config.log_iters == 0:
+            if (not self.config.no_save) and (self.step - start_step) > 0 and self.step % self.config.log_iters == 0:
                 torch.cuda.empty_cache()
                 self.save()
                 torch.cuda.empty_cache()
