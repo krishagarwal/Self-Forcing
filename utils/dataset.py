@@ -76,12 +76,15 @@ class ShardingLMDBDataset(Dataset):
 
         for fname in sorted(os.listdir(data_path)):
             path = os.path.join(data_path, fname)
+            if not os.path.isdir(path):
+                continue
             env = lmdb.open(path,
                             readonly=True,
                             lock=False,
                             readahead=False,
                             meminit=False)
             self.envs.append(env)
+        assert len(self.envs) > 0, f"No valid lmdb shard found in {data_path}"
 
         self.latents_shape = [None] * len(self.envs)
         for shard_id, env in enumerate(self.envs):
