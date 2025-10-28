@@ -28,6 +28,7 @@ class CausalDiffusion(BaseModel):
         self.guidance_scale = args.guidance_scale
         self.timestep_shift = getattr(args, "timestep_shift", 1.0)
         self.teacher_forcing = getattr(args, "teacher_forcing", False)
+        self.num_training_frames = getattr(args, "num_training_frames", 21)
         # Noise augmentation in teacher forcing, we add small noise to clean context latents
         self.noise_augmentation_max_timestep = getattr(args, "noise_augmentation_max_timestep", 0)
 
