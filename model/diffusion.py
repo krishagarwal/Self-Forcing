@@ -42,6 +42,9 @@ class CausalDiffusion(BaseModel):
         self.vae = WanVAEWrapper()
         self.vae.requires_grad_(False)
 
+        self.scheduler = self.generator.get_scheduler()
+        self.scheduler.timesteps = self.scheduler.timesteps.to(device)
+
     def generator_loss(
         self,
         image_or_video_shape,
