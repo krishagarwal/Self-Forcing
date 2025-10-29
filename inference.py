@@ -13,6 +13,8 @@ from torch.utils.data.distributed import DistributedSampler
 from pipeline import (
     CausalDiffusionInferencePipeline,
     CausalInferencePipeline,
+    BidirectionalDiffusionInferencePipeline,
+    BidirectionalInferencePipeline,
 )
 from utils.dataset import TextDataset, TextImagePairDataset
 from utils.misc import set_seed
@@ -61,14 +63,20 @@ config = OmegaConf.merge(default_config, config)
 # Initialize pipeline
 if hasattr(config, 'denoising_step_list'):
     # Few-step inference
-    pipeline = CausalInferencePipeline(config, device=device)
+    pipeline = CausalInferencePipeline(config, device=device) if config.causal else BidirectionalInferencePipeline(config, device=device)
 else:
     # Multi-step diffusion inference
-    pipeline = CausalDiffusionInferencePipeline(config, device=device)
+    pipeline = CausalDiffusionInferencePipeline(config, device=device) if config.causal else BidirectionalDiffusionInferencePipeline(config, device=device)
 
 if args.checkpoint_path:
-    state_dict = torch.load(args.checkpoint_path, map_location="cpu")
-    pipeline.generator.load_state_dict(state_dict['generator' if not args.use_ema else 'generator_ema'])
+    if args.checkpoint_path.endswith(".safetensors"):
+        from safetensors.torch import load_file
+        state_dict = load_file(args.checkpoint_path, device="cpu")
+        state_dict = {f"model.{k}" : v for k, v in state_dict.items()}
+    else:
+        state_dict = torch.load(args.checkpoint_path, map_location="cpu")
+        state_dict = state_dict['generator' if not args.use_ema else 'generator_ema']
+        pipeline.generator.load_state_dict(state_dict)
 
 pipeline = pipeline.to(dtype=torch.bfloat16)
 if low_memory:
@@ -163,13 +171,22 @@ for i, batch_data in tqdm(enumerate(dataloader), disable=(local_rank != 0)):
         )
 
     # Generate 81 frames
-    video, latents = pipeline.inference(
-        noise=sampled_noise,
-        text_prompts=prompts,
-        return_latents=True,
-        initial_latent=initial_latent,
-        low_memory=low_memory,
-    )
+
+    if config.causal:
+        video, latents = pipeline.inference(
+            noise=sampled_noise,
+            text_prompts=prompts,
+            return_latents=True,
+            initial_latent=initial_latent,
+            low_memory=low_memory,
+        )
+    else:
+        assert initial_latent is None, "I2V not supported for bidirectional model"
+        video, latents = pipeline.inference(
+            noise=sampled_noise,
+            text_prompts=prompts,
+            return_latents=True,
+        )
     current_video = rearrange(video, 'b t c h w -> b t h w c').cpu()
     all_video.append(current_video)
     num_generated_frames += latents.shape[1]

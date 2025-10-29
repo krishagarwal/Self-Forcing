@@ -261,8 +261,11 @@ class WanSelfAttention(nn.Module):
         self.qk_norm = qk_norm
         self.eps = eps
 
+        self.min_block_size = int(os.getenv("MONARCH_ATTN_MIN_BLOCK_SIZE", "1"))
+        self.target_sparsity = os.getenv("MONARCH_ATTN_TARGET_SPARSITY")
+        if self.target_sparsity is not None:
+            self.target_sparsity = float(self.target_sparsity)
         self.num_iters = int(os.getenv("MONARCH_ATTN_NUM_ITERS", "1"))
-        self.target_sparsity = float(os.getenv("MONARCH_ATTN_TARGET_SPARSITY", "1.0"))
         self.disable_monarch = bool(int(os.getenv("DISABLE_MONARCH_ATTN", "0")))
 
         # layers
@@ -272,10 +275,13 @@ class WanSelfAttention(nn.Module):
         self.o = nn.Linear(dim, dim)
         self.norm_q = WanRMSNorm(dim, eps=eps) if qk_norm else nn.Identity()
         self.norm_k = WanRMSNorm(dim, eps=eps) if qk_norm else nn.Identity()
-    
-    def get_block_sizes(self, h, w, q_seq_len):
-        return (q_seq_len // w, w)
-        factors = [i for i in range(1, h + 1) if h % i == 0]
+
+    def get_block_sizes(self, seq_len, h, w):
+        # return (h, w)
+        if self.target_sparsity is None:
+            return (h, w) # max sparsity
+        factors = [i for i in range(self.min_block_size, h + 1) if h % i == 0]
+        assert len(factors) > 0, f"Cannot find usable block sizes with min block size {self.min_block_size}"
         sparsities = [1 - (f*f*w + w*w*f)/(f*f*w*w) for f in factors]
         dists = [abs(s - self.target_sparsity) for s in sparsities]
         min_idx = dists.index(min(dists))
@@ -308,7 +314,7 @@ class WanSelfAttention(nn.Module):
                 k_lens=seq_lens,
                 window_size=self.window_size)
         else:
-            block_b1, block_b2 = self.get_block_sizes(grid_sizes[0, 1].item(), grid_sizes[0, 2].item(), q.size(1))
+            block_b1, block_b2 = self.get_block_sizes(q.size(1), grid_sizes[0, 1].item(), grid_sizes[0, 2].item())
             b, s, h, d = q.shape
             q = rope_apply(q, grid_sizes, freqs)
             k = rope_apply(k, grid_sizes, freqs)
@@ -852,11 +858,13 @@ class WanModel(ModelMixin, ConfigMixin):
             [torch.tensor(u.shape[2:], dtype=torch.long) for u in x])
         x = [u.flatten(2).transpose(1, 2) for u in x]
         seq_lens = torch.tensor([u.size(1) for u in x], dtype=torch.long)
+        assert torch.all(seq_lens == seq_lens[0])
         assert seq_lens.max() <= seq_len
-        x = torch.cat([
-            torch.cat([u, u.new_zeros(1, seq_len - u.size(1), u.size(2))],
-                      dim=1) for u in x
-        ])
+        # x = torch.cat([
+        #     torch.cat([u, u.new_zeros(1, seq_len - u.size(1), u.size(2))],
+        #               dim=1) for u in x
+        # ])
+        x = torch.cat(x)
 
         # time embeddings
         # with amp.autocast(dtype=torch.float32):
