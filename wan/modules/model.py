@@ -249,10 +249,7 @@ class MonarchAttnImplicitFn(torch.autograd.Function):
 
         _, (grad_Q, grad_K, grad_V, grad_aR, grad_cR) = torch.autograd.functional.vjp(O_from_QKV_aR_cR, (Q, K, V, aR_star, cR_star), v=grad_out, create_graph=False, strict=True)
 
-        def aR_cR_from_aR_cR(aRcR_in):
-            aR_in = aRcR_in[:b*a*f*k*j*h*d].view(b, a, f, k, j, h, d)
-            cR_in = aRcR_in[b*a*f*k*j*h*d:].view(b, h, a, f, k, j, 1)
-
+        def aR_cR_from_aR_cR(aR_in, cR_in):
             bR = torch.einsum("bafkjhd,bfklhd->bhafkjl", aR_in, K)
             z = bR.to(torch.float32) * (1.0 / (cR_in + eps)).clamp_max(1e4)
             z = z - z.amax(dim=-1, keepdim=True)
@@ -269,8 +266,7 @@ class MonarchAttnImplicitFn(torch.autograd.Function):
 
             aR_out = torch.einsum("bhafjki,baijhd->bafkjhd", L, Q)
             cR_out = L.sum(dim=-1, dtype=torch.float32).unsqueeze(-1).transpose(-2, -3) # (b, h, a, f, k, j, 1)
-            aRcR_out = torch.cat([aR_out.flatten(), cR_out.flatten()])
-            return aRcR_out
+            return aR_out, cR_out
         
         # def solve_adj_gmres2(v, lam=0.0):
         #     v = torch.cat([v_i.flatten() for v_i in v])
