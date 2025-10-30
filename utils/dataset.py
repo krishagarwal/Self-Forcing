@@ -37,7 +37,7 @@ class TextDataset(Dataset):
 class ODERegressionLMDBDataset(Dataset):
     def __init__(self, data_path: str, max_pair: int = int(1e8)):
         self.env = lmdb.open(data_path, readonly=True,
-                             lock=False, readahead=False, meminit=False)
+                             lock=False, readahead=False, meminit=False, subdir=False)
 
         self.latents_shape = get_array_shape_from_lmdb(self.env, 'latents')
         self.max_pair = max_pair
