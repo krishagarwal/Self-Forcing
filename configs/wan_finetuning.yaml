@@ -39,7 +39,7 @@ image_or_video_shape:
 - 60
 - 104
 causal: false
-trainer: diffusion
+trainer: ode
 gradient_checkpointing: true
 load_raw_video: false
 model_kwargs:
