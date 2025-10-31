@@ -19,7 +19,7 @@ class ODERegression(BaseModel):
 
         # Step 1: Initialize all models
 
-        self.generator = WanDiffusionWrapper(**getattr(args, "model_kwargs", {}), is_causal=True)
+        self.generator = WanDiffusionWrapper(**getattr(args, "model_kwargs", {}), is_causal=args.causal)
         self.generator.model.requires_grad_(True)
         if getattr(args, "generator_ckpt", False):
             print(f"Loading pretrained generator from {args.generator_ckpt}")
