@@ -380,7 +380,6 @@ class Trainer:
                         for rank in range(1, self.world_size):
                             recv_prompts = self.recv_object(src=rank)
                             recv_videos = self.recv_object(src=rank)
-                            breakpoint()
                             all_prompts.extend(recv_prompts)
                             all_videos.append(recv_videos)
 
