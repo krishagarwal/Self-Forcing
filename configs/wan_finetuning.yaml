@@ -40,6 +40,7 @@ image_or_video_shape:
 - 104
 causal: false
 trainer: ode
+distribution_loss: ode
 gradient_checkpointing: true
 load_raw_video: false
 model_kwargs:
