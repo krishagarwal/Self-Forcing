@@ -108,12 +108,12 @@ spec:
                   cd /code-fsx/beidchen-sandbox/Self-Forcing &&
                   pip install -r requirements.txt &&
                   python setup.py develop &&
-                  mkdir -p /code-fsx/beidchen-sandbox/self_forcing_logs/finetune_wan_monarch_fast_0.85_real &&
+                  mkdir -p /code-fsx/beidchen-sandbox/self_forcing_logs/finetune_wan_monarch_fast_0.85 &&
                   export MONARCH_ATTN_MIN_BLOCK_SIZE=5 &&
                   export MONARCH_ATTN_TARGET_SPARSITY=0.85 &&
                   export MONARCH_ATTN_NUM_ITERS=1 &&
                   export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True &&
-                  torchrun --nproc_per_node=8 --rdzv-conf="timeout=7200,read_timeout=7200,join_timeout=7200" train.py --config_path configs/wan_finetuning.yaml --logdir /code-fsx/beidchen-sandbox/self_forcing_logs/finetune_wan_monarch_fast_0.85_real --wandb_name finetune_wan_monarch_fast_0.85 | tee /code-fsx/beidchen-sandbox/finetune_wan_monarch_fast_0.85_real.log
+                  torchrun --nproc_per_node=8 --rdzv-conf="timeout=7200,read_timeout=7200,join_timeout=7200" train.py --config_path configs/wan_finetuning.yaml --logdir /code-fsx/beidchen-sandbox/self_forcing_logs/finetune_wan_monarch_fast_0.85 --wandb_name finetune_wan_monarch_fast_0.85 | tee /code-fsx/beidchen-sandbox/finetune_wan_monarch_fast_0.85.log
               image: 767397878797.dkr.ecr.us-east-1.amazonaws.com/agif-mm-pt-base:reasoning-vllm.sglang.megatron.deepseek.video.fa3
               imagePullPolicy: Always
               securityContext:
