@@ -40,6 +40,7 @@ class ODERegression(BaseModel):
             )
 
         self.num_frame_per_block = getattr(args, "num_frame_per_block", 1)
+        self.num_training_frames = getattr(args, "num_training_frames", 21)
 
         if self.num_frame_per_block > 1:
             self.generator.model.num_frame_per_block = self.num_frame_per_block
