@@ -122,7 +122,7 @@ class Trainer:
             self.generator_ema = EMA_FSDP(self.model.generator, decay=ema_weight)
 
         checkpoint_folders = glob.glob(os.path.join(self.output_path, "checkpoint_model_*"))
-        if len(checkpoint_folders) > 0:
+        if False:#len(checkpoint_folders) > 0:
             checkpoint_folders = sorted(checkpoint_folders, key=lambda x: int(x.split("_")[-1]))
             latest_folder = checkpoint_folders[-1]
             checkpoint_path = os.path.join(latest_folder, "model.pt")
