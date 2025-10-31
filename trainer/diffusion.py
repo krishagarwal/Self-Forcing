@@ -383,8 +383,6 @@ class Trainer:
                             all_prompts.extend(recv_prompts)
                             all_videos.append(recv_videos)
 
-                        print([type(v) for v in all_videos])
-                        print([v.shape for v in all_videos])
                         all_videos = np.concatenate(all_videos, axis=0)
 
                         log_videos = []
