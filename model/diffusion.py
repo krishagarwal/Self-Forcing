@@ -31,6 +31,7 @@ class CausalDiffusion(BaseModel):
         self.num_training_frames = getattr(args, "num_training_frames", 21)
         # Noise augmentation in teacher forcing, we add small noise to clean context latents
         self.noise_augmentation_max_timestep = getattr(args, "noise_augmentation_max_timestep", 0)
+        self.causal = args.causal
 
     def _initialize_models(self, args, device):
         self.generator = WanDiffusionWrapper(**getattr(args, "model_kwargs", {}), is_causal=args.causal)
@@ -77,7 +78,7 @@ class CausalDiffusion(BaseModel):
             image_or_video_shape[0],
             image_or_video_shape[1],
             self.num_frame_per_block,
-            uniform_timestep=False
+            uniform_timestep=(not self.causal)
         )
         timestep = self.scheduler.timesteps[index].to(dtype=self.dtype, device=self.device)
         noisy_latents = self.scheduler.add_noise(
