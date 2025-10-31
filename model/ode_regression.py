@@ -83,7 +83,7 @@ class ODERegression(BaseModel):
         # Step 1: Randomly choose a timestep for each frame
         index = self._get_timestep(
             0,
-            len(self.denoising_step_list),
+            self.scheduler.num_train_timesteps, # len(self.denoising_step_list),
             batch_size,
             num_frames,
             self.num_frame_per_block,
@@ -92,13 +92,21 @@ class ODERegression(BaseModel):
         if self.args.i2v:
             index[:, 0] = len(self.denoising_step_list) - 1
 
-        noisy_input = torch.gather(
-            ode_latent, dim=1,
-            index=index.reshape(batch_size, 1, num_frames, 1, 1, 1).expand(
-                -1, -1, -1, num_channels, height, width).to(self.device)
-        ).squeeze(1)
+        # noisy_input = torch.gather(
+        #     ode_latent, dim=1,
+        #     index=index.reshape(batch_size, 1, num_frames, 1, 1, 1).expand(
+        #         -1, -1, -1, num_channels, height, width).to(self.device)
+        # ).squeeze(1)
 
-        timestep = self.denoising_step_list[index].to(self.device)
+        timestep = self.scheduler.timesteps[index].to(self.device)
+
+        clean_latent = ode_latent[:, -1].to(device=self.device, dtype=self.dtype)
+        noise = torch.randn_like(clean_latent)
+        noisy_input = self.scheduler.add_noise(
+            clean_latent.flatten(0, 1),
+            noise.flatten(0, 1),
+            timestep.flatten(0, 1)
+        ).unflatten(0, (batch_size, num_frames))
 
         # if self.extra_noise_step > 0:
         #     random_timestep = torch.randint(0, self.extra_noise_step, [
