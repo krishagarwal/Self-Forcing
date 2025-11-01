@@ -516,13 +516,24 @@ class WanSelfAttention(nn.Module):
 
     def get_block_sizes(self, seq_len, h, w):
         if self.target_sparsity is None:
+            # one set of factors
             return (seq_len // w, w)
-        else:
+        elif self.target_sparsity == 0.95:
+            # 3 frames per set of factors
             assert (seq_len // w) % 3 == 0
             return (seq_len // (3 * w), w)
+        elif self.target_sparsity == 0.85:
+            # 3 frames per set of factors, reduced sparsity along w
+            assert (seq_len // w) % 3 == 0 and w % 2 == 0
+            return (seq_len // (3 * w), w // 2)
+        else:
+            # 3 frames per set of factors, reduced sparsity along h
+            assert h % 2 == 0 and ((seq_len // w) // 2) % 3 == 0
+            return (seq_len // (3 * 2 * w), w)
+        # seqlen_b1 = seq_len // w
         # if self.target_sparsity is None:
-        #     return (h, w) # max sparsity
-        # factors = [i for i in range(self.min_block_size, h + 1) if h % i == 0]
+        #     return (seqlen_b1, w) # max sparsity
+        # factors = [i for i in range(self.min_block_size, seqlen_b1 + 1) if seqlen_b1 % i == 0]
         # assert len(factors) > 0, f"Cannot find usable block sizes with min block size {self.min_block_size}"
         # sparsities = [1 - (f*f*w + w*w*f)/(f*f*w*w) for f in factors]
         # dists = [abs(s - self.target_sparsity) for s in sparsities]
@@ -556,14 +567,42 @@ class WanSelfAttention(nn.Module):
                 k_lens=seq_lens,
                 window_size=self.window_size)
         else:
-            block_b1, block_b2 = self.get_block_sizes(q.size(1), grid_sizes[0, 1].item(), grid_sizes[0, 2].item())
+            h1, w1 = grid_sizes[0, 1].item(), grid_sizes[0, 2].item()
+            block_b1, block_b2 = self.get_block_sizes(q.size(1), h1, w1)
             b, s, h, d = q.shape
             q = rope_apply(q, grid_sizes, freqs)
             k = rope_apply(k, grid_sizes, freqs)
-            q = q.view(b, -1, block_b1, block_b2, h, d)
-            k = k.view(b, -1, block_b1, block_b2, h, d)
-            v = v.view(b, -1, block_b1, block_b2, h, d)
-            x = monarch_attn(q, k, v, d ** -0.5, self.num_iters, self.eps).reshape(b, s, h, d)
+            # q = q.view(b, -1, block_b1, block_b2, h, d)
+            # k = k.view(b, -1, block_b1, block_b2, h, d)
+            # v = v.view(b, -1, block_b1, block_b2, h, d)
+            # x = monarch_attn(q, k, v, d ** -0.5, self.num_iters, self.eps).reshape(b, s, h, d)
+
+            if self.target_sparsity is None or self.target_sparsity == 0.95:
+                def rearrange_fn(x):
+                    return x.view(b, -1, block_b1, block_b2, h, d)
+                def return_fn(x):
+                    return x.reshape(b, s, h, d)
+            if self.target_sparsity == 0.85:
+                # 3 frames per set of factors, reduced sparsity along w
+                def rearrange_fn(x):
+                    x = x.view(b, -1, block_b1, w1 // block_b2, block_b2, h, d)
+                    return rearrange(x, 'b a i c j h d -> b (a c) i j h d')
+                def return_fn(x):
+                    return rearrange(x, 'b (a c) i j h d -> b (a i c j) h d', c=(w1 // block_b2))
+            else:
+                f = q.size(1)
+                # 3 frames per set of factors, reduced sparsity along w
+                def rearrange_fn(x):
+                    x = x.view(b, -1, f, (f*h1) // block_b1, block_b1 // f, block_b2, h, d)
+                    return rearrange(x, 'b a f c i j h d -> b (a c) (f i) j h d')
+                def return_fn(x):
+                    return rearrange(x, 'b (a c) (f i) j h d -> b (a f c i j) h d', c=((f*h1) // block_b1), f=f)
+
+            q = rearrange_fn(q)
+            k = rearrange_fn(k)
+            v = rearrange_fn(v)
+
+            x = return_fn(monarch_attn(q, k, v, d ** -0.5, self.num_iters, self.eps))
 
         # output
         x = x.flatten(2)
