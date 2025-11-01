@@ -520,15 +520,15 @@ class WanSelfAttention(nn.Module):
         self.norm_k = WanRMSNorm(dim, eps=eps) if qk_norm else nn.Identity()
 
     def get_block_sizes(self, seq_len, h, w):
-        # return (h, w)
-        if self.target_sparsity is None:
-            return (h, w) # max sparsity
-        factors = [i for i in range(self.min_block_size, h + 1) if h % i == 0]
-        assert len(factors) > 0, f"Cannot find usable block sizes with min block size {self.min_block_size}"
-        sparsities = [1 - (f*f*w + w*w*f)/(f*f*w*w) for f in factors]
-        dists = [abs(s - self.target_sparsity) for s in sparsities]
-        min_idx = dists.index(min(dists))
-        return (factors[min_idx], w)
+        return (seq_len // w, w)
+        # if self.target_sparsity is None:
+        #     return (h, w) # max sparsity
+        # factors = [i for i in range(self.min_block_size, h + 1) if h % i == 0]
+        # assert len(factors) > 0, f"Cannot find usable block sizes with min block size {self.min_block_size}"
+        # sparsities = [1 - (f*f*w + w*w*f)/(f*f*w*w) for f in factors]
+        # dists = [abs(s - self.target_sparsity) for s in sparsities]
+        # min_idx = dists.index(min(dists))
+        # return (factors[min_idx], w)
 
     def forward(self, x, seq_lens, grid_sizes, freqs):
         r"""
