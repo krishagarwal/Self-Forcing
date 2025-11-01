@@ -555,7 +555,11 @@ class WanSelfAttention(nn.Module):
         self.norm_k = WanRMSNorm(dim, eps=eps) if qk_norm else nn.Identity()
 
     def get_block_sizes(self, seq_len, h, w):
-        return (seq_len // w, w)
+        if self.target_sparsity is None:
+            return (seq_len // w, w)
+        else:
+            assert (seq_len // w) % 3 == 0
+            return (seq_len // (3 * w), w)
         # if self.target_sparsity is None:
         #     return (h, w) # max sparsity
         # factors = [i for i in range(self.min_block_size, h + 1) if h % i == 0]
