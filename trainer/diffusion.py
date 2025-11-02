@@ -396,7 +396,7 @@ class Trainer:
                         self.send_object(local_prompts, dst=0)
                         self.send_object(validation, dst=0)
 
-            barrier()
+                # barrier()
 
             batch = next(self.dataloader)
             self.train_one_step(batch)
