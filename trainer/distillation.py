@@ -456,6 +456,8 @@ class Trainer:
                         self.send_object(local_prompts, dst=0)
                         self.send_object(validation, dst=0)
 
+            barrier()
+
             TRAIN_GENERATOR = self.step % self.config.dfake_gen_update_ratio == 0
 
             # Train the generator
