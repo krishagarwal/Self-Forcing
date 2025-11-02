@@ -387,9 +387,7 @@ class Trainer:
 
                         log_videos = []
                         for i, prompt in enumerate(all_prompts):
-                            filename = f"/workspace/temp_{self.step}_{i}.mp4"
-                            write_video(filename, all_videos[i], fps=16)
-                            log_videos.append(wandb.Video(filename, caption=prompt))
+                            log_videos.append(wandb.Video(all_videos[i].transpose(0, 3, 1, 2), fps=16, caption=prompt))
                         logs = { "validation_videos": log_videos }
                         wandb.log(logs, step=self.step)
                     else:
