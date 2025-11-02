@@ -107,6 +107,7 @@ spec:
                   cp -r /checkpoints-fsx/beidchen-sandbox/video/self_forcing /workspace &&
                   cd /code-fsx/beidchen-sandbox/Self-Forcing &&
                   pip install -r requirements.txt &&
+                  pip install wandb[media] &&
                   python setup.py develop &&
                   mkdir -p /code-fsx/beidchen-sandbox/self_forcing_logs/finetune_wan_monarch_fast_tied3frame &&
                   export MONARCH_ATTN_MIN_BLOCK_SIZE=5 &&

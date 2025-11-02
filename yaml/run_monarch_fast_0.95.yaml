@@ -107,6 +107,7 @@ spec:
                   cp -r /checkpoints-fsx/beidchen-sandbox/video/self_forcing /workspace &&
                   cd /code-fsx/beidchen-sandbox/Self-Forcing &&
                   pip install -r requirements.txt &&
+                  pip install wandb[media] &&
                   python setup.py develop &&
                   mkdir -p /code-fsx/beidchen-sandbox/self_forcing_logs/self_forcing_dmd_monarch_cross_frame_fast_0.95 &&
                   export MONARCH_ATTN_TARGET_SPARSITY=0.95 &&
