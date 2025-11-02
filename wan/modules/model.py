@@ -590,7 +590,7 @@ class WanSelfAttention(nn.Module):
                 def return_fn(x):
                     return rearrange(x, 'b (a c) i j h d -> b (a i c j) h d', c=(w1 // block_b2))
             else:
-                f = q.size(1)
+                f = q.size(1) // (h1 * w1)
                 # 3 frames per set of factors, reduced sparsity along w
                 def rearrange_fn(x):
                     x = x.view(b, -1, f, (f*h1) // block_b1, block_b1 // f, block_b2, h, d)
