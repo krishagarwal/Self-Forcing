@@ -6,7 +6,7 @@ import numpy as np
 
 from utils.dataset import ShardingLMDBDataset, cycle
 from utils.dataset import TextDataset
-from utils.distributed import EMA_FSDP, fsdp_wrap, fsdp_state_dict, launch_distributed_job
+from utils.distributed import EMA_FSDP, barrier, fsdp_wrap, fsdp_state_dict, launch_distributed_job
 from utils.misc import (
     set_seed,
     merge_dict_list
