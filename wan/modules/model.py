@@ -520,16 +520,16 @@ class WanSelfAttention(nn.Module):
             return (seq_len // w, w)
         elif self.target_sparsity == 0.95:
             # 3 frames per set of factors
-            assert (seq_len // w) % 3 == 0
-            return (seq_len // (3 * w), w)
+            assert (seq_len // (h * w)) % 3 == 0
+            return (3 * h, w)
         elif self.target_sparsity == 0.85:
             # 3 frames per set of factors, reduced sparsity along w
-            assert (seq_len // w) % 3 == 0 and w % 2 == 0
-            return (seq_len // (3 * w), w // 2)
+            assert (seq_len // (h * w)) % 3 == 0 and w % 2 == 0
+            return (3 * h, w // 2)
         else:
             # 3 frames per set of factors, reduced sparsity along h
-            assert h % 2 == 0 and ((seq_len // w) // 2) % 3 == 0
-            return (seq_len // (3 * 2 * w), w)
+            assert h % 2 == 0 and (seq_len // (h * w)) % 3 == 0
+            return ((3, h // 2), w)
         # seqlen_b1 = seq_len // w
         # if self.target_sparsity is None:
         #     return (seqlen_b1, w) # max sparsity
@@ -590,13 +590,13 @@ class WanSelfAttention(nn.Module):
                 def return_fn(x):
                     return rearrange(x, 'b (a c) i j h d -> b (a i c j) h d', c=(w1 // block_b2))
             else:
-                f = q.size(1) // (h1 * w1)
+                f_per_set, block_b1 = block_b1
                 # 3 frames per set of factors, reduced sparsity along w
                 def rearrange_fn(x):
-                    x = x.view(b, -1, f, (f*h1) // block_b1, block_b1 // f, block_b2, h, d)
+                    x = x.view(b, -1, f_per_set, h1 // block_b1, block_b1, block_b2, h, d)
                     return rearrange(x, 'b a f c i j h d -> b (a c) (f i) j h d')
                 def return_fn(x):
-                    return rearrange(x, 'b (a c) (f i) j h d -> b (a f c i j) h d', c=((f*h1) // block_b1), f=f)
+                    return rearrange(x, 'b (a c) (f i) j h d -> b (a f c i j) h d', c=h1 // block_b1, f=f_per_set)
 
             q = rearrange_fn(q)
             k = rearrange_fn(k)
