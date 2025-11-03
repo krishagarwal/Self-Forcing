@@ -161,11 +161,35 @@ class Trainer:
             print(f"Setting up EMA with weight {ema_weight}")
             self.generator_ema = EMA_FSDP(self.model.generator, decay=ema_weight)
 
+        checkpoint_folders = glob.glob(os.path.join(self.output_path, "checkpoint_model_*"))
+        if False:#len(checkpoint_folders) > 0:
+            checkpoint_folders = sorted(checkpoint_folders, key=lambda x: int(x.split("_")[-1]))
+            latest_folder = checkpoint_folders[-1]
+            checkpoint_path = os.path.join(latest_folder, "model.pt")
+            self.step = int(latest_folder.split("_")[-1])
+            print(f"Resuming from checkpoint {checkpoint_path} at step {self.step}")
+        else:
+            checkpoint_path = getattr(config, "generator_ckpt", None)
+            print("Starting training from scratch")
+
         ##############################################################################################################
         # 7. (If resuming) Load the model and optimizer, lr_scheduler, ema's statedicts
-        if getattr(config, "generator_ckpt", False):
-            print(f"Loading pretrained generator from {config.generator_ckpt}")
-            state_dict = torch.load(config.generator_ckpt, map_location="cpu")
+        if checkpoint_path is not None:
+            print(f"Loading pretrained generator from {checkpoint_path}")
+            if checkpoint_path.endswith(".safetensors"):
+                from safetensors.torch import load_file
+                state_dict = load_file(config.generator_ckpt, device="cpu")
+                state_dict = {f"model.{k}" : v for k, v in state_dict.items()}
+            else:
+                state_dict = torch.load(checkpoint_path, map_location="cpu")
+            if "generator_ema" in state_dict and self.generator_ema is not None:
+                self.generator_ema.load_state_dict(
+                    state_dict["generator_ema"], strict=True
+                )
+            if "critic" in state_dict:
+                self.model.fake_score.load_state_dict(
+                    state_dict["critic"], strict=True
+                )
             if "generator" in state_dict:
                 state_dict = state_dict["generator"]
             elif "model" in state_dict:
@@ -184,12 +208,10 @@ class Trainer:
         self.max_grad_norm_critic = getattr(config, "max_grad_norm_critic", 10.0)
         self.previous_time = None
 
-        self.val_pipeline = CausalInferencePipeline(config, self.device, generator=self.model.generator, text_encoder=self.model.text_encoder, vae=self.model.vae)
+        inf_pipeline_type = (CausalInferencePipeline if self.causal else BidirectionalInferencePipeline) \
+            if hasattr(config, 'denoising_step_list') else (CausalDiffusionInferencePipeline if self.causal else BidirectionalDiffusionInferencePipeline)
 
-        # inf_pipeline_type = (CausalInferencePipeline if self.causal else BidirectionalInferencePipeline) \
-        #     if hasattr(config, 'denoising_step_list') else (CausalDiffusionInferencePipeline if self.causal else BidirectionalDiffusionInferencePipeline)
-
-        # self.val_pipeline = inf_pipeline_type(config, self.device, generator=self.model.generator, text_encoder=self.model.text_encoder, vae=self.model.vae)
+        self.val_pipeline = inf_pipeline_type(config, self.device, generator=self.model.generator, text_encoder=self.model.text_encoder, vae=self.model.vae)
         self.cpu_group = torch.distributed.new_group(list(range(self.world_size)), backend="gloo")
         if config.validation_prompts_file is not None:
             with open(config.validation_prompts_file, "r") as f:

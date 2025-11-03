@@ -7,7 +7,8 @@ import torch
 from pipeline import SelfForcingTrainingPipeline
 from utils.loss import get_denoising_loss
 from utils.wan_wrapper import WanDiffusionWrapper, WanTextEncoder, WanVAEWrapper
-
+import os
+from unittest.mock import patch
 
 class BaseModel(nn.Module):
     def __init__(self, args, device):
@@ -30,11 +31,12 @@ class BaseModel(nn.Module):
         self.generator = WanDiffusionWrapper(**getattr(args, "model_kwargs", {}), is_causal=True)
         self.generator.model.requires_grad_(True)
 
-        self.real_score = WanDiffusionWrapper(model_name=self.real_model_name, is_causal=False)
-        self.real_score.model.requires_grad_(False)
+        with patch.dict(os.environ, {"DISABLE_MONARCH_ATTN": "1"}, clear=False):
+            self.real_score = WanDiffusionWrapper(model_name=self.real_model_name, is_causal=False)
+            self.real_score.model.requires_grad_(False)
 
-        self.fake_score = WanDiffusionWrapper(model_name=self.fake_model_name, is_causal=False)
-        self.fake_score.model.requires_grad_(True)
+            self.fake_score = WanDiffusionWrapper(model_name=self.fake_model_name, is_causal=False)
+            self.fake_score.model.requires_grad_(True)
 
         self.text_encoder = WanTextEncoder()
         self.text_encoder.requires_grad_(False)
