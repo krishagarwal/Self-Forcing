@@ -582,7 +582,7 @@ class WanSelfAttention(nn.Module):
                     return x.view(b, -1, block_b1, block_b2, h, d)
                 def return_fn(x):
                     return x.reshape(b, s, h, d)
-            if self.target_sparsity == 0.85:
+            elif self.target_sparsity == 0.85:
                 # 3 frames per set of factors, reduced sparsity along w
                 def rearrange_fn(x):
                     x = x.view(b, -1, block_b1, w1 // block_b2, block_b2, h, d)
