@@ -725,7 +725,7 @@ class CausalWanSelfAttention(nn.Module):
         else:
             assert h % 2 == 0
             if q_seq_len == (3 * h * w):
-                return (1, h // 2, w)
+                return ((1, h // 2), w)
             return ((q_seq_len // (h * w), q_seq_len // (2 * w)), w)
         # factors = [i for i in range(1, h + 1) if h % i == 0]
         # sparsities = [1 - (f*f*w + w*w*f)/(f*f*w*w) for f in factors]
