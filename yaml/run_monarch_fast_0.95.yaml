@@ -108,11 +108,10 @@ spec:
                   cd /code-fsx/beidchen-sandbox/Self-Forcing &&
                   pip install -r requirements.txt &&
                   python setup.py develop &&
-                  mkdir -p /code-fsx/beidchen-sandbox/self_forcing_logs/self_forcing_dmd_monarch_cross_frame_fast_initialize &&
-                  export MONARCH_ATTN_TARGET_SPARSITY=0.95 &&
+                  mkdir -p /code-fsx/beidchen-sandbox/self_forcing_logs/self_forcing_dmd_monarch_fast_framewise &&
                   export MONARCH_ATTN_NUM_ITERS=1 &&
                   export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True &&
-                  torchrun --nproc_per_node=8 --rdzv-conf="timeout=7200,read_timeout=7200,join_timeout=7200" train.py --wandb-save-dir /workspace/wandb --config_path configs/self_forcing_sid.yaml --logdir /code-fsx/beidchen-sandbox/self_forcing_logs/self_forcing_dmd_monarch_cross_frame_fast_initialize --wandb_name dmd_monarch_cross_frame_fast_initialize | tee /code-fsx/beidchen-sandbox/self_forcing_dmd_monarch_cross_frame_fast_initialize.log
+                  torchrun --nproc_per_node=8 --rdzv-conf="timeout=7200,read_timeout=7200,join_timeout=7200" train.py --wandb-save-dir /workspace/wandb --config_path configs/self_forcing_sid.yaml --logdir /code-fsx/beidchen-sandbox/self_forcing_logs/self_forcing_dmd_monarch_fast_framewise --wandb_name dmd_monarch_fast_framewise | tee /code-fsx/beidchen-sandbox/self_forcing_dmd_monarch_fast_framewise.log
               image: 767397878797.dkr.ecr.us-east-1.amazonaws.com/agif-mm-pt-base:reasoning-vllm.sglang.megatron.deepseek.video.fa3
               imagePullPolicy: Always
               securityContext:

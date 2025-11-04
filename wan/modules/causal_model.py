@@ -696,7 +696,9 @@ class CausalWanSelfAttention(nn.Module):
         self.max_attention_size = 32760 if local_attn_size == -1 else local_attn_size * 1560
 
         self.num_iters = int(os.getenv("MONARCH_ATTN_NUM_ITERS", "1"))
-        self.target_sparsity = float(os.getenv("MONARCH_ATTN_TARGET_SPARSITY", "1.0"))
+        self.target_sparsity = os.getenv("MONARCH_ATTN_TARGET_SPARSITY")
+        if self.target_sparsity is not None:
+            self.target_sparsity = float(self.target_sparsity)
         self.disable_monarch = bool(int(os.getenv("DISABLE_MONARCH_ATTN", "0")))
 
         # layers
@@ -708,14 +710,28 @@ class CausalWanSelfAttention(nn.Module):
         self.norm_k = WanRMSNorm(dim, eps=eps) if qk_norm else nn.Identity()
 
     def get_block_sizes(self, h, w, q_seq_len):
-        if q_seq_len == (3 * h * w):
+        # regular factors test
+        if self.target_sparsity is None:
             return (h, w)
-        return (q_seq_len // w, w)
-        factors = [i for i in range(1, h + 1) if h % i == 0]
-        sparsities = [1 - (f*f*w + w*w*f)/(f*f*w*w) for f in factors]
-        dists = [abs(s - self.target_sparsity) for s in sparsities]
-        min_idx = dists.index(min(dists))
-        return (factors[min_idx], w)
+        if self.target_sparsity == 0.95:
+            if q_seq_len == (3 * h * w):
+                return (h, w)
+            return (q_seq_len // w, w)
+        if self.target_sparsity == 0.85:
+            assert w % 2 == 0
+            if q_seq_len == (3 * h * w):
+                return (h, w // 2)
+            return (q_seq_len // w, w // 2)
+        else:
+            assert h % 2 == 0
+            if q_seq_len == (3 * h * w):
+                return (1, h // 2, w)
+            return (q_seq_len // (h * w), q_seq_len // (2 * w), w)
+        # factors = [i for i in range(1, h + 1) if h % i == 0]
+        # sparsities = [1 - (f*f*w + w*w*f)/(f*f*w*w) for f in factors]
+        # dists = [abs(s - self.target_sparsity) for s in sparsities]
+        # min_idx = dists.index(min(dists))
+        # return (factors[min_idx], w)
 
     def forward(
         self,
@@ -881,11 +897,37 @@ class CausalWanSelfAttention(nn.Module):
                 block_b1, block_b2 = self.get_block_sizes(grid_sizes[0, 1].item(), grid_sizes[0, 2].item(), q.size(1))
                 # block_b1 = grid_sizes[0, 1]
                 # block_b2 = grid_sizes[0, 2]
+                curr_k = kv_cache["k"][:, max(0, local_end_index - self.max_attention_size):local_end_index]
+                curr_v = kv_cache["v"][:, max(0, local_end_index - self.max_attention_size):local_end_index]
+
                 b, s, h, d = roped_query.shape
-                curr_q = roped_query.view(b, -1, block_b1, block_b2, h, d)
-                curr_k = kv_cache["k"][:, max(0, local_end_index - self.max_attention_size):local_end_index].view(b, -1, block_b1, block_b2, h, d)
-                curr_v = kv_cache["v"][:, max(0, local_end_index - self.max_attention_size):local_end_index].view(b, -1, block_b1, block_b2, h, d)
-                x = monarch_attn(curr_q, curr_k, curr_v, d ** -0.5, self.num_iters, self.eps).reshape(b, s, h, d)
+                h1, w1 = grid_sizes[0, 1].item(), grid_sizes[0, 2].item()
+                if self.target_sparsity is None or self.target_sparsity == 0.95:
+                    def rearrange_fn(x):
+                        return x.view(b, -1, block_b1, block_b2, h, d)
+                    def return_fn(x):
+                        return x.reshape(b, s, h, d)
+                elif self.target_sparsity == 0.85:
+                    def rearrange_fn(x):
+                        x = x.view(b, -1, block_b1, w1 // block_b2, block_b2, h, d)
+                        return rearrange(x, 'b a i c j h d -> b (a c) i j h d')
+                    def return_fn(x):
+                        return rearrange(x, 'b (a c) i j h d -> b (a i c j) h d', c=(w1 // block_b2))
+                else:
+                    f_per_set, block_b1 = block_b1
+                    def rearrange_fn(x):
+                        x = x.view(b, -1, f_per_set, h1 // block_b1, block_b1, block_b2, h, d)
+                        return rearrange(x, 'b a f c i j h d -> b (a c) (f i) j h d')
+                    def return_fn(x):
+                        return rearrange(x, 'b (a c) (f i) j h d -> b (a f c i j) h d', c=h1 // block_b1, f=f_per_set)
+                # curr_q = roped_query.view(b, -1, block_b1, block_b2, h, d)
+                # curr_k = curr_k.view(b, -1, block_b1, block_b2, h, d)
+                # curr_v = curr_v.view(b, -1, block_b1, block_b2, h, d)
+                # x = monarch_attn(curr_q, curr_k, curr_v, d ** -0.5, self.num_iters, self.eps).reshape(b, s, h, d)
+                curr_q = rearrange_fn(roped_query)
+                curr_k = rearrange_fn(curr_k)
+                curr_v = rearrange_fn(curr_v)
+                x = return_fn(monarch_attn(curr_q, curr_k, curr_v, d ** -0.5, self.num_iters, self.eps))
 
             kv_cache["global_end_index"].fill_(current_end)
             kv_cache["local_end_index"].fill_(local_end_index)
