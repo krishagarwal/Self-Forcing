@@ -708,6 +708,8 @@ class CausalWanSelfAttention(nn.Module):
         self.norm_k = WanRMSNorm(dim, eps=eps) if qk_norm else nn.Identity()
 
     def get_block_sizes(self, h, w, q_seq_len):
+        if q_seq_len == (3 * h * w):
+            return (h, w)
         return (q_seq_len // w, w)
         factors = [i for i in range(1, h + 1) if h % i == 0]
         sparsities = [1 - (f*f*w + w*w*f)/(f*f*w*w) for f in factors]
