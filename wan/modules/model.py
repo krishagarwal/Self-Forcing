@@ -523,13 +523,13 @@ class WanSelfAttention(nn.Module):
             assert (seq_len // (h * w)) % 3 == 0
             return (3 * h, w)
         elif self.target_sparsity == 0.85:
-            # 3 frames per set of factors, reduced sparsity along w
-            assert (seq_len // (h * w)) % 3 == 0 and w % 2 == 0
-            return (3 * h, w // 2)
+            # full cross frame, reduced sparsity along w
+            assert w % 2 == 0
+            return (seq_len // w, w // 2)
         else:
-            # 3 frames per set of factors, reduced sparsity along h
-            assert h % 2 == 0 and (seq_len // (h * w)) % 3 == 0
-            return ((3, h // 2), w)
+            # full cross frame, reduced sparsity along h
+            assert h % 2 == 0
+            return ((seq_len // (h * w), h // 2), w)
         # seqlen_b1 = seq_len // w
         # if self.target_sparsity is None:
         #     return (seqlen_b1, w) # max sparsity
