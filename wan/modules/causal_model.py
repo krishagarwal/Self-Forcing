@@ -726,12 +726,12 @@ class CausalWanSelfAttention(nn.Module):
             assert w % self.w_reduce == 0
             # if q_seq_len == (3 * h * w):
             #     return (h, w // 2)
-            return (q_seq_len // w, w // self.w_reduce)
+            return (h, w // self.w_reduce) # (q_seq_len // w, w // self.w_reduce)
         elif self.target_sparsity == 0.75:
             assert h % self.h_reduce == 0
             if q_seq_len == (3 * h * w) and self.use_initialize:
                 return ((1, h // self.h_reduce), w)
-            return ((q_seq_len // (h * w), h // self.h_reduce), w)
+            return ((1, h // self.h_reduce), w) # ((q_seq_len // (h * w), h // self.h_reduce), w)
         else:
             assert h % self.h_reduce == 0 and w % self.w_reduce == 0
             if q_seq_len == (3 * h * w) and self.use_initialize:
