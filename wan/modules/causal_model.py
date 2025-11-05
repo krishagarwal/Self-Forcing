@@ -719,13 +719,13 @@ class CausalWanSelfAttention(nn.Module):
             return (q_seq_len // w, w)
         if self.target_sparsity == 0.85:
             assert w % 2 == 0
-            if q_seq_len == (3 * h * w):
-                return (h, w // 2)
+            # if q_seq_len == (3 * h * w):
+            #     return (h, w // 2)
             return (q_seq_len // w, w // 2)
         else:
             assert h % 2 == 0
-            if q_seq_len == (3 * h * w):
-                return ((1, h // 2), w)
+            # if q_seq_len == (3 * h * w):
+            #     return ((1, h // 2), w)
             return ((q_seq_len // (h * w), q_seq_len // (2 * w)), w)
         # factors = [i for i in range(1, h + 1) if h % i == 0]
         # sparsities = [1 - (f*f*w + w*w*f)/(f*f*w*w) for f in factors]
