@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 import gc
 import glob
 import logging
@@ -20,7 +21,7 @@ import time
 import os
 from torchvision.io import write_video
 from pipeline import CausalInferencePipeline, CausalDiffusionInferencePipeline, BidirectionalInferencePipeline, BidirectionalDiffusionInferencePipeline
-
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 
 class Trainer:
     def __init__(self, config):
@@ -415,12 +416,38 @@ class Trainer:
         current_video = video.permute(0, 1, 3, 4, 2).cpu().numpy() * 255.0
         return current_video
 
+    @contextmanager
+    def use_generator_ema(self):
+        """Temporarily load EMA weights into the FSDP-wrapped generator."""
+        if self.generator_ema is None:
+            # EMA not active yet
+            yield False
+            return
+
+        # Backup current (non-EMA) params on CPU
+        backup = {}
+        with FSDP.summon_full_params(self.model.generator, writeback=False):
+            for n, p in self.model.generator.module.named_parameters():
+                backup[n] = p.detach().clone().cpu()
+
+        # Load EMA params into the live generator
+        self.generator_ema.copy_to(self.model.generator)
+
+        try:
+            yield True
+        finally:
+            # Restore training params
+            with FSDP.summon_full_params(self.model.generator, writeback=True):
+                for n, p in self.model.generator.module.named_parameters():
+                    p.data.copy_(backup[n].to(device=p.device, dtype=p.dtype))
+
     def train(self):
         start_step = self.step
 
         while self.step <= 800:
             if self.step % 100 == 0 and not (self.disable_wandb or self.val_prompts is None):
-                with torch.no_grad():
+                with torch.no_grad(), self.use_generator_ema():
+                    self.model.generator.eval()
                     # prompts = [
                     #     "In the video, two people are working at a wooden desk, using an iMac computer. One person, wearing a white knit sweater, is using the apple wireless mouse with their right hand, while their left hand rests on the sleek white keyboard. Their movements are smooth yet intentional, suggesting they are focused on a task on the computer screen. The monitor displays a well-organized array of files and folders, hinting at a task that involves detailed organization or detailed data navigation. The second person, only subtly visible, sits closely by and appears to observe or assist, creating a collaborative atmosphere. Their presence adds a quiet dynamic to the scene, as if they are ready to provide input or guidance. Sticky notes with handwritten notes are attached to the monitor’s stand, adding a touch of personal organization amidst the digital workspace. The focus on the keyboard and mouse emphasizes a streamlined workflow, indicative of a productive work environment. The overall ambiance is calm and focuses on teamwork, technology, and efficient workspace management.",
                     #     "A determined climber is scaling a massive rock face, showcasing exceptional strength and skill. The person, clad in a teal shirt and dark pants, climbs with precision, their movements measured and deliberate. They are secured by climbing gear, which includes ropes and a harness, emphasizing their commitment to safety. The rugged texture of the sandy-colored rock provides an imposing backdrop, adding drama and scale to the climb. In the distance, other large rock formations and sparse vegetation can be seen under a bright, overcast sky, contributing to the natural and adventurous atmosphere. The scene captures a moment of focus and challenge, highlighting the climber's tenacity and the breathtaking environment.",
@@ -456,7 +483,8 @@ class Trainer:
                         self.send_object(local_prompts, dst=0)
                         self.send_object(validation, dst=0)
 
-            barrier()
+                self.model.generator.train()
+                barrier()
 
             TRAIN_GENERATOR = self.step % self.config.dfake_gen_update_ratio == 0
 
