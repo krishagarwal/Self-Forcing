@@ -699,6 +699,7 @@ class CausalWanSelfAttention(nn.Module):
         self.target_sparsity = os.getenv("MONARCH_ATTN_TARGET_SPARSITY")
         if self.target_sparsity is not None:
             self.target_sparsity = float(self.target_sparsity)
+        self.use_initialize = bool(int(os.getenv("MONARCH_ATTN_USE_INITIALIZE", "0")))
         self.disable_monarch = bool(int(os.getenv("DISABLE_MONARCH_ATTN", "0")))
 
         # layers
@@ -724,9 +725,9 @@ class CausalWanSelfAttention(nn.Module):
             return (q_seq_len // w, w // 2)
         else:
             assert h % 2 == 0
-            # if q_seq_len == (3 * h * w):
-            #     return ((1, h // 2), w)
-            return ((q_seq_len // (h * w), q_seq_len // (2 * w)), w)
+            if q_seq_len == (3 * h * w) and self.use_initialize:
+                return ((1, h // 2), w)
+            return ((q_seq_len // (h * w), h // 2), w)
         # factors = [i for i in range(1, h + 1) if h % i == 0]
         # sparsities = [1 - (f*f*w + w*w*f)/(f*f*w*w) for f in factors]
         # dists = [abs(s - self.target_sparsity) for s in sparsities]
