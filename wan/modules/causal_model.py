@@ -720,6 +720,8 @@ class CausalWanSelfAttention(nn.Module):
             if q_seq_len == (3 * h * w):
                 return (h, w)
             return (q_seq_len // w, w)
+        if self.target_sparsity == 0.9:
+            return (h // 2, 2 * w)
         if self.target_sparsity == 0.85:
             assert w % self.w_reduce == 0
             # if q_seq_len == (3 * h * w):
@@ -910,7 +912,7 @@ class CausalWanSelfAttention(nn.Module):
 
                 b, s, h, d = roped_query.shape
                 h1, w1 = grid_sizes[0, 1].item(), grid_sizes[0, 2].item()
-                if self.target_sparsity is None or self.target_sparsity == 0.95:
+                if self.target_sparsity is None or self.target_sparsity == 0.95 or self.target_sparsity == 0.9:
                     def rearrange_fn(x):
                         return x.view(b, -1, block_b1, block_b2, h, d)
                     def return_fn(x):
