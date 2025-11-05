@@ -36,7 +36,7 @@ spec:
                         values:
                           - p5.48xlarge
           tolerations:
-            - key: mziyadi-lmsys-ce-p5
+            - key: ikiss-swe-skills-p5
               operator: Equal
               value: "True"
               effect: NoSchedule
