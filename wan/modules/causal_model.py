@@ -700,6 +700,8 @@ class CausalWanSelfAttention(nn.Module):
         if self.target_sparsity is not None:
             self.target_sparsity = float(self.target_sparsity)
         self.use_initialize = bool(int(os.getenv("MONARCH_ATTN_USE_INITIALIZE", "0")))
+        self.h_reduce = int(os.getenv("MONARCH_ATTN_H_REDUCE", "2"))
+        self.w_reduce = int(os.getenv("MONARCH_ATTN_W_REDUCE", "2"))
         self.disable_monarch = bool(int(os.getenv("DISABLE_MONARCH_ATTN", "0")))
 
         # layers
@@ -719,15 +721,20 @@ class CausalWanSelfAttention(nn.Module):
                 return (h, w)
             return (q_seq_len // w, w)
         if self.target_sparsity == 0.85:
-            assert w % 2 == 0
+            assert w % self.w_reduce == 0
             # if q_seq_len == (3 * h * w):
             #     return (h, w // 2)
-            return (q_seq_len // w, w // 2)
-        else:
-            assert h % 2 == 0
+            return (q_seq_len // w, w // self.w_reduce)
+        elif self.target_sparsity == 0.75:
+            assert h % self.h_reduce == 0
             if q_seq_len == (3 * h * w) and self.use_initialize:
-                return ((1, h // 2), w)
-            return ((q_seq_len // (h * w), h // 2), w)
+                return ((1, h // self.h_reduce), w)
+            return ((q_seq_len // (h * w), h // self.h_reduce), w)
+        else:
+            assert h % self.h_reduce == 0 and w % self.w_reduce == 0
+            if q_seq_len == (3 * h * w) and self.use_initialize:
+                return ((1, h // self.h_reduce), w // self.w_reduce)
+            return ((q_seq_len // (h * w), h // self.h_reduce), w // self.w_reduce)
         # factors = [i for i in range(1, h + 1) if h % i == 0]
         # sparsities = [1 - (f*f*w + w*w*f)/(f*f*w*w) for f in factors]
         # dists = [abs(s - self.target_sparsity) for s in sparsities]
@@ -914,13 +921,20 @@ class CausalWanSelfAttention(nn.Module):
                         return rearrange(x, 'b a i c j h d -> b (a c) i j h d')
                     def return_fn(x):
                         return rearrange(x, 'b (a c) i j h d -> b (a i c j) h d', c=(w1 // block_b2))
-                else:
+                elif self.target_sparsity == 0.75:
                     f_per_set, block_b1 = block_b1
                     def rearrange_fn(x):
                         x = x.view(b, -1, f_per_set, h1 // block_b1, block_b1, block_b2, h, d)
                         return rearrange(x, 'b a f c i j h d -> b (a c) (f i) j h d')
                     def return_fn(x):
                         return rearrange(x, 'b (a c) (f i) j h d -> b (a f c i j) h d', c=h1 // block_b1, f=f_per_set)
+                else:
+                    f_per_set, block_b1 = block_b1
+                    def rearrange_fn(x):
+                        x = x.view(b, -1, f_per_set, h1 // block_b1, block_b1, w1 // block_b2, block_b2, h, d)
+                        return rearrange(x, 'b a f c i e j h d -> b (a c e) (f i) j h d')
+                    def return_fn(x):
+                        return rearrange(x, 'b (a c e) (f i) j h d -> b (a f c i e j) h d', c=h1 // block_b1, e=w1 // block_b2, f=f_per_set)
                 # curr_q = roped_query.view(b, -1, block_b1, block_b2, h, d)
                 # curr_k = curr_k.view(b, -1, block_b1, block_b2, h, d)
                 # curr_v = curr_v.view(b, -1, block_b1, block_b2, h, d)
