@@ -492,8 +492,8 @@ class Trainer:
             # Save the model
             if (not self.config.no_save) and (self.step - start_step) > 0 and self.step % self.config.log_iters == 0:
                 torch.cuda.empty_cache()
-                self.save()
-                torch.cuda.empty_cache()
+                # self.save()
+                # torch.cuda.empty_cache()
 
             # Logging
             if self.is_main_process:
