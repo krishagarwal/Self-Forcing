@@ -726,12 +726,12 @@ class CausalWanSelfAttention(nn.Module):
             assert w % self.w_reduce == 0
             # if q_seq_len == (3 * h * w):
             #     return (h, w // 2)
-            return (h, w // self.w_reduce) # (q_seq_len // w, w // self.w_reduce)
+            return (q_seq_len // w, w // self.w_reduce)
         elif self.target_sparsity == 0.75:
             assert h % self.h_reduce == 0
             if q_seq_len == (3 * h * w) and self.use_initialize:
                 return ((1, h // self.h_reduce), w)
-            return ((1, h // self.h_reduce), w) # ((q_seq_len // (h * w), h // self.h_reduce), w)
+            return ((q_seq_len // (h * w), h // self.h_reduce), w)
         else:
             assert h % self.h_reduce == 0 and w % self.w_reduce == 0
             if q_seq_len == (3 * h * w) and self.use_initialize:
@@ -919,17 +919,17 @@ class CausalWanSelfAttention(nn.Module):
                         return x.reshape(b, s, h, d)
                 elif self.target_sparsity == 0.85:
                     def rearrange_fn(x):
-                        x = x.view(b, -1, block_b1, w1 // block_b2, block_b2, h, d)
-                        return rearrange(x, 'b a i c j h d -> b (a c) i j h d')
+                        x = x.view(b, -1, block_b1, block_b2, w1 // block_b2, h, d)
+                        return rearrange(x, 'b a i j c h d -> b (a c) i j h d')
                     def return_fn(x):
-                        return rearrange(x, 'b (a c) i j h d -> b (a i c j) h d', c=(w1 // block_b2))
+                        return rearrange(x, 'b (a c) i j h d -> b (a i j c) h d', c=(w1 // block_b2))
                 elif self.target_sparsity == 0.75:
                     f_per_set, block_b1 = block_b1
                     def rearrange_fn(x):
-                        x = x.view(b, -1, f_per_set, h1 // block_b1, block_b1, block_b2, h, d)
-                        return rearrange(x, 'b a f c i j h d -> b (a c) (f i) j h d')
+                        x = x.view(b, -1, f_per_set, block_b1, h1 // block_b1, block_b2, h, d)
+                        return rearrange(x, 'b a f i c j h d -> b (a c) (f i) j h d')
                     def return_fn(x):
-                        return rearrange(x, 'b (a c) (f i) j h d -> b (a f c i j) h d', c=h1 // block_b1, f=f_per_set)
+                        return rearrange(x, 'b (a c) (f i) j h d -> b (a f i c j) h d', c=h1 // block_b1, f=f_per_set)
                 else:
                     f_per_set, block_b1 = block_b1
                     def rearrange_fn(x):
