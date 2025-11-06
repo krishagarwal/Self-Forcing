@@ -721,30 +721,31 @@ class CausalWanSelfAttention(nn.Module):
         self.norm_k = WanRMSNorm(dim, eps=eps) if qk_norm else nn.Identity()
 
     def get_block_sizes(self, h, w, q_seq_len):
+        q_frames = q_seq_len // (h * w)
         # regular factors test
         if self.target_sparsity is None:
             return (h, w)
         if self.target_sparsity == 0.95:
-            if q_seq_len == (3 * h * w):
+            if q_frames == 3 and self.use_initialize:
                 return (h, w)
             return (q_seq_len // w, w)
         if self.target_sparsity == 0.9:
             return (h // 2, 2 * w)
         if self.target_sparsity == 0.85:
             assert w % self.w_reduce == 0
-            # if q_seq_len == (3 * h * w):
-            #     return (h, w // 2)
+            if q_frames == 3 and self.use_initialize:
+                return (h, w // 2)
             return (q_seq_len // w, w // self.w_reduce)
         elif self.target_sparsity == 0.75:
             assert h % self.h_reduce == 0
-            if q_seq_len == (3 * h * w) and self.use_initialize:
+            if q_frames == 3 and self.use_initialize:
                 return ((1, h // self.h_reduce), w)
-            return ((q_seq_len // (h * w), h // self.h_reduce), w)
+            return ((q_frames, h // self.h_reduce), w)
         else:
             assert h % self.h_reduce == 0 and w % self.w_reduce == 0
-            if q_seq_len == (3 * h * w) and self.use_initialize:
+            if q_frames == 3 and self.use_initialize:
                 return ((1, h // self.h_reduce), w // self.w_reduce)
-            return ((1, h // self.h_reduce), w // self.w_reduce)
+            return ((q_frames, h // self.h_reduce), w // self.w_reduce)
         # factors = [i for i in range(1, h + 1) if h % i == 0]
         # sparsities = [1 - (f*f*w + w*w*f)/(f*f*w*w) for f in factors]
         # dists = [abs(s - self.target_sparsity) for s in sparsities]
