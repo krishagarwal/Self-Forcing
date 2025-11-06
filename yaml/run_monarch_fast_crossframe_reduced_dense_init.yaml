@@ -108,13 +108,14 @@ spec:
                   cd /code-fsx/beidchen-sandbox/Self-Forcing &&
                   pip install -r requirements.txt &&
                   python setup.py develop &&
-                  mkdir -p /code-fsx/beidchen-sandbox/self_forcing_logs/self_forcing_dmd_monarch_cross_frame_fast_reduce2xw_denseinit &&
-                  export MONARCH_ATTN_TARGET_SPARSITY=0.85 &&
+                  mkdir -p /code-fsx/beidchen-sandbox/self_forcing_logs/self_forcing_dmd_monarch_cross_frame_fast_reduce_denseinit &&
+                  export MONARCH_ATTN_TARGET_SPARSITY=0.65 &&
                   export MONARCH_ATTN_NUM_ITERS=1 &&
-                  export MONARCH_ATTN_W_REDUCE=2 &&
+                  export MONARCH_ATTN_W_REDUCE=1 &&
+                  export MONARCH_ATTN_H_REDUCE=1 &&
                   export MONARCH_ATTN_USE_DENSE_INIT=1 &&
                   export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True &&
-                  torchrun --nproc_per_node=8 --rdzv-conf="timeout=7200,read_timeout=7200,join_timeout=7200" train.py --wandb-save-dir /workspace/wandb --config_path configs/self_forcing_sid.yaml --logdir /code-fsx/beidchen-sandbox/self_forcing_logs/self_forcing_dmd_monarch_cross_frame_fast_reduce2xw_denseinit --wandb_name dmd_monarch_cross_frame_fast_reduce2xw_denseinit | tee /code-fsx/beidchen-sandbox/self_forcing_dmd_monarch_cross_frame_fast_reduce2xw_denseinit.log
+                  torchrun --nproc_per_node=8 --rdzv-conf="timeout=7200,read_timeout=7200,join_timeout=7200" train.py --wandb-save-dir /workspace/wandb --config_path configs/self_forcing_sid.yaml --logdir /code-fsx/beidchen-sandbox/self_forcing_logs/self_forcing_dmd_monarch_cross_frame_fast_reduce_denseinit --wandb_name dmd_monarch_cross_frame_fast_reduce_denseinit | tee /code-fsx/beidchen-sandbox/self_forcing_dmd_monarch_cross_frame_fast_reduce_denseinit.log
               image: 767397878797.dkr.ecr.us-east-1.amazonaws.com/agif-mm-pt-base:reasoning-vllm.sglang.megatron.deepseek.video.fa3
               imagePullPolicy: Always
               securityContext:
