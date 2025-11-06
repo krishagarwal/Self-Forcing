@@ -683,7 +683,8 @@ class CausalWanSelfAttention(nn.Module):
                  local_attn_size=-1,
                  sink_size=0,
                  qk_norm=True,
-                 eps=1e-6):
+                 eps=1e-6,
+                 block_num=None):
         assert dim % num_heads == 0
         super().__init__()
         self.dim = dim
@@ -703,6 +704,12 @@ class CausalWanSelfAttention(nn.Module):
         self.h_reduce = int(os.getenv("MONARCH_ATTN_H_REDUCE", "2"))
         self.w_reduce = int(os.getenv("MONARCH_ATTN_W_REDUCE", "2"))
         self.disable_monarch = bool(int(os.getenv("DISABLE_MONARCH_ATTN", "0")))
+        layer_disable_list = os.getenv("MONARCH_ATTN_DISABLE_LAYERS")
+        if layer_disable_list is not None:
+            assert block_num is not None
+            layer_disable_list = [int(x) for x in layer_disable_list.split(",")]
+            if block_num in layer_disable_list:
+                self.disable_monarch = True
 
         # layers
         self.q = nn.Linear(dim, dim)
@@ -919,17 +926,17 @@ class CausalWanSelfAttention(nn.Module):
                         return x.reshape(b, s, h, d)
                 elif self.target_sparsity == 0.85:
                     def rearrange_fn(x):
-                        x = x.view(b, -1, block_b1, block_b2, w1 // block_b2, h, d)
-                        return rearrange(x, 'b a i j c h d -> b (a c) i j h d')
+                        x = x.view(b, -1, block_b1, w1 // block_b2, block_b2, h, d)
+                        return rearrange(x, 'b a i c j h d -> b (a c) i j h d')
                     def return_fn(x):
-                        return rearrange(x, 'b (a c) i j h d -> b (a i j c) h d', c=(w1 // block_b2))
+                        return rearrange(x, 'b (a c) i j h d -> b (a i c j) h d', c=(w1 // block_b2))
                 elif self.target_sparsity == 0.75:
                     f_per_set, block_b1 = block_b1
                     def rearrange_fn(x):
-                        x = x.view(b, -1, f_per_set, block_b1, h1 // block_b1, block_b2, h, d)
-                        return rearrange(x, 'b a f i c j h d -> b (a c) (f i) j h d')
+                        x = x.view(b, -1, f_per_set, h1 // block_b1, block_b1, block_b2, h, d)
+                        return rearrange(x, 'b a f c i j h d -> b (a c) (f i) j h d')
                     def return_fn(x):
-                        return rearrange(x, 'b (a c) (f i) j h d -> b (a f i c j) h d', c=h1 // block_b1, f=f_per_set)
+                        return rearrange(x, 'b (a c) (f i) j h d -> b (a f c i j) h d', c=h1 // block_b1, f=f_per_set)
                 else:
                     f_per_set, block_b1 = block_b1
                     def rearrange_fn(x):
@@ -966,7 +973,8 @@ class CausalWanAttentionBlock(nn.Module):
                  sink_size=0,
                  qk_norm=True,
                  cross_attn_norm=False,
-                 eps=1e-6):
+                 eps=1e-6,
+                 block_num=None):
         super().__init__()
         self.dim = dim
         self.ffn_dim = ffn_dim
@@ -978,7 +986,7 @@ class CausalWanAttentionBlock(nn.Module):
 
         # layers
         self.norm1 = WanLayerNorm(dim, eps)
-        self.self_attn = CausalWanSelfAttention(dim, num_heads, local_attn_size, sink_size, qk_norm, eps)
+        self.self_attn = CausalWanSelfAttention(dim, num_heads, local_attn_size, sink_size, qk_norm, eps, block_num)
         self.norm3 = WanLayerNorm(
             dim, eps,
             elementwise_affine=True) if cross_attn_norm else nn.Identity()
@@ -1184,8 +1192,8 @@ class CausalWanModel(ModelMixin, ConfigMixin):
         cross_attn_type = 't2v_cross_attn' if model_type == 't2v' else 'i2v_cross_attn'
         self.blocks = nn.ModuleList([
             CausalWanAttentionBlock(cross_attn_type, dim, ffn_dim, num_heads,
-                                    local_attn_size, sink_size, qk_norm, cross_attn_norm, eps)
-            for _ in range(num_layers)
+                                    local_attn_size, sink_size, qk_norm, cross_attn_norm, eps, i)
+            for i in range(num_layers)
         ])
 
         # head
