@@ -490,7 +490,7 @@ class Trainer:
                 self.run_validation()
                 if self.generator_ema is None:
                     with self.use_generator_ema():
-                        self.run_validation(name="validation_videos_ema")
+                        self.run_validation("validation_videos_ema")
 
             TRAIN_GENERATOR = self.step % self.config.dfake_gen_update_ratio == 0
 
@@ -526,8 +526,8 @@ class Trainer:
             # Save the model
             if (not self.config.no_save) and (self.step - start_step) > 0 and self.step % self.config.log_iters == 0:
                 torch.cuda.empty_cache()
-                self.save()
-                torch.cuda.empty_cache()
+                # self.save()
+                # torch.cuda.empty_cache()
 
             # Logging
             if self.is_main_process:
