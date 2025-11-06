@@ -21,7 +21,7 @@
 # kubectl apply -f yaml/run_monarch_fast_crossframe_sweep4.yaml
 # kubectl apply -f yaml/run_monarch_fast_framewise_reduced_h.yaml
 # kubectl apply -f yaml/run_monarch_fast_framewise_reduced_w.yaml
-# kubectl apply -f yaml/run_monarch_fast_framewise_reduced_max_sparse.yaml
-# kubectl apply -f yaml/run_monarch_fast_framewise_reduced_max_sparse2.yaml
+kubectl apply -f yaml/run_monarch_fast_framewise_reduced_max_sparse.yaml
+kubectl apply -f yaml/run_monarch_fast_framewise_reduced_max_sparse2.yaml
 kubectl apply -f yaml/run_monarch_fast_framewise_reduced_max_sparse3.yaml
 kubectl apply -f yaml/run_monarch_fast_framewise_reduced_max_sparse4.yaml
