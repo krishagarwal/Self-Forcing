@@ -33,7 +33,7 @@ data_path: prompts/vidprom_filtered_extended.txt
 batch_size: 1
 sid_alpha: 1.0
 ema_weight: 0.99
-ema_start_step: 200
+ema_start_step: 0
 total_batch_size: 64
 log_iters: 50
 validation_prompts_file: prompts/MovieGenVideoBench.txt
