@@ -122,4 +122,4 @@ class EMA_FSDP:
         with FSDP.summon_full_params(fsdp_module, writeback=True):
             for n, p in fsdp_module.module.named_parameters():
                 if n in self.shadow:
-                    p.data.copy_(self.shadow[n].to(p.dtype, device=p.device))
+                    p.data.copy_(self.shadow[n].to(dtype=p.dtype, device=p.device))
