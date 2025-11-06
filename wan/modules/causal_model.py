@@ -701,6 +701,7 @@ class CausalWanSelfAttention(nn.Module):
         if self.target_sparsity is not None:
             self.target_sparsity = float(self.target_sparsity)
         self.use_initialize = bool(int(os.getenv("MONARCH_ATTN_USE_INITIALIZE", "0")))
+        self.use_dense_init = bool(int(os.getenv("MONARCH_ATTN_USE_DENSE_INIT", "0")))
         self.h_reduce = int(os.getenv("MONARCH_ATTN_H_REDUCE", "2"))
         self.w_reduce = int(os.getenv("MONARCH_ATTN_W_REDUCE", "2"))
         self.disable_monarch = bool(int(os.getenv("DISABLE_MONARCH_ATTN", "0")))
@@ -904,7 +905,7 @@ class CausalWanSelfAttention(nn.Module):
             # if kv_cache["k"].data_ptr() != ptr and dist.get_rank() == 0:
             #     print("Warning: kv_cache has been reallocated, data_ptr changed from",
             #           ptr, "to", kv_cache["k"].data_ptr())
-            if self.disable_monarch:
+            if self.disable_monarch or (self.use_dense_init and q.size(1) == (3 * grid_sizes[0, 1].item() * grid_sizes[0, 2].item())):
                 x = attention(
                     roped_query,
                     kv_cache["k"][:, max(0, local_end_index - self.max_attention_size):local_end_index],
