@@ -488,7 +488,7 @@ class Trainer:
         while self.step <= 800:
             if self.step % 100 == 0 and not (self.disable_wandb or self.val_prompts is None):
                 self.run_validation()
-                if self.generator_ema is None:
+                if self.generator_ema is not None:
                     with self.use_generator_ema():
                         self.run_validation("validation_videos_ema")
 
