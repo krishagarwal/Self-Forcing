@@ -704,6 +704,12 @@ class CausalWanSelfAttention(nn.Module):
         self.use_dense_init = bool(int(os.getenv("MONARCH_ATTN_USE_DENSE_INIT", "0")))
         self.h_reduce = int(os.getenv("MONARCH_ATTN_H_REDUCE", "2"))
         self.w_reduce = int(os.getenv("MONARCH_ATTN_W_REDUCE", "2"))
+        self.init_h_reduce = os.getenv("MONARCH_ATTN_INIT_H_REDUCE")
+        if self.init_h_reduce is not None:
+            self.init_h_reduce = int(self.init_h_reduce)
+        self.init_w_reduce = os.getenv("MONARCH_ATTN_INIT_W_REDUCE")
+        if self.init_w_reduce is not None:
+            self.init_w_reduce = int(self.init_w_reduce)
         self.disable_monarch = bool(int(os.getenv("DISABLE_MONARCH_ATTN", "0")))
         layer_disable_list = os.getenv("MONARCH_ATTN_DISABLE_LAYERS")
         if layer_disable_list is not None:
@@ -727,26 +733,29 @@ class CausalWanSelfAttention(nn.Module):
         if self.target_sparsity is None:
             return (h, w)
         if self.target_sparsity == 0.95:
-            if k_frames == 3 and self.use_initialize:
+            if k_frames == q_frames and self.use_initialize:
                 return (h, w)
             return (q_seq_len // w, w)
         if self.target_sparsity == 0.9:
             return (h // 2, 2 * w)
         if self.target_sparsity == 0.85:
             assert w % self.w_reduce == 0
-            if k_frames == 3 and self.use_initialize:
+            if k_frames == q_frames and self.use_initialize:
                 return (h, w // 2)
             return (q_seq_len // w, w // self.w_reduce)
         elif self.target_sparsity == 0.75:
             assert h % self.h_reduce == 0
-            if k_frames == 3 and self.use_initialize:
+            if k_frames == q_frames and self.use_initialize:
                 return ((1, h // self.h_reduce), w)
             return ((q_frames, h // self.h_reduce), w)
         else:
-            assert h % self.h_reduce == 0 and w % self.w_reduce == 0
-            if k_frames == 3 and self.use_initialize:
-                return ((1, h // self.h_reduce), w // self.w_reduce)
-            return ((q_frames, h // self.h_reduce), w // self.w_reduce)
+            is_init = k_frames == q_frames
+            h_reduce = self.h_reduce if (not is_init or self.init_h_reduce is None) else self.init_h_reduce
+            w_reduce = self.w_reduce if (not is_init or self.init_w_reduce is None) else self.init_w_reduce
+            assert h % h_reduce == 0 and w % w_reduce == 0
+            if k_frames == q_frames and self.use_initialize:
+                return ((1, h // h_reduce), w // w_reduce)
+            return ((q_frames, h // h_reduce), w // w_reduce)
         # factors = [i for i in range(1, h + 1) if h % i == 0]
         # sparsities = [1 - (f*f*w + w*w*f)/(f*f*w*w) for f in factors]
         # dists = [abs(s - self.target_sparsity) for s in sparsities]
