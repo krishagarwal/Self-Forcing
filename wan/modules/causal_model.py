@@ -720,30 +720,31 @@ class CausalWanSelfAttention(nn.Module):
         self.norm_q = WanRMSNorm(dim, eps=eps) if qk_norm else nn.Identity()
         self.norm_k = WanRMSNorm(dim, eps=eps) if qk_norm else nn.Identity()
 
-    def get_block_sizes(self, h, w, q_seq_len):
+    def get_block_sizes(self, h, w, q_seq_len, k_seq_len):
         q_frames = q_seq_len // (h * w)
+        k_frames = k_seq_len // (h * w)
         # regular factors test
         if self.target_sparsity is None:
             return (h, w)
         if self.target_sparsity == 0.95:
-            if q_frames == 3 and self.use_initialize:
+            if k_frames == 3 and self.use_initialize:
                 return (h, w)
             return (q_seq_len // w, w)
         if self.target_sparsity == 0.9:
             return (h // 2, 2 * w)
         if self.target_sparsity == 0.85:
             assert w % self.w_reduce == 0
-            if q_frames == 3 and self.use_initialize:
+            if k_frames == 3 and self.use_initialize:
                 return (h, w // 2)
             return (q_seq_len // w, w // self.w_reduce)
         elif self.target_sparsity == 0.75:
             assert h % self.h_reduce == 0
-            if q_frames == 3 and self.use_initialize:
+            if k_frames == 3 and self.use_initialize:
                 return ((1, h // self.h_reduce), w)
             return ((q_frames, h // self.h_reduce), w)
         else:
             assert h % self.h_reduce == 0 and w % self.w_reduce == 0
-            if q_frames == 3 and self.use_initialize:
+            if k_frames == 3 and self.use_initialize:
                 return ((1, h // self.h_reduce), w // self.w_reduce)
             return ((q_frames, h // self.h_reduce), w // self.w_reduce)
         # factors = [i for i in range(1, h + 1) if h % i == 0]
@@ -906,18 +907,19 @@ class CausalWanSelfAttention(nn.Module):
             # if kv_cache["k"].data_ptr() != ptr and dist.get_rank() == 0:
             #     print("Warning: kv_cache has been reallocated, data_ptr changed from",
             #           ptr, "to", kv_cache["k"].data_ptr())
-            if self.disable_monarch or (self.use_dense_init and q.size(1) == (3 * grid_sizes[0, 1].item() * grid_sizes[0, 2].item())):
+            curr_k = kv_cache["k"][:, max(0, local_end_index - self.max_attention_size):local_end_index]
+            curr_v = kv_cache["v"][:, max(0, local_end_index - self.max_attention_size):local_end_index]
+            if self.disable_monarch or (self.use_dense_init and curr_k.size(1) == (3 * grid_sizes[0, 1].item() * grid_sizes[0, 2].item())):
+                print("dense init")
                 x = attention(
                     roped_query,
-                    kv_cache["k"][:, max(0, local_end_index - self.max_attention_size):local_end_index],
-                    kv_cache["v"][:, max(0, local_end_index - self.max_attention_size):local_end_index]
+                    curr_k,
+                    curr_v
                 )
             else:
-                block_b1, block_b2 = self.get_block_sizes(grid_sizes[0, 1].item(), grid_sizes[0, 2].item(), q.size(1))
+                block_b1, block_b2 = self.get_block_sizes(grid_sizes[0, 1].item(), grid_sizes[0, 2].item(), q.size(1), curr_k.size(1))
                 # block_b1 = grid_sizes[0, 1]
                 # block_b2 = grid_sizes[0, 2]
-                curr_k = kv_cache["k"][:, max(0, local_end_index - self.max_attention_size):local_end_index]
-                curr_v = kv_cache["v"][:, max(0, local_end_index - self.max_attention_size):local_end_index]
 
                 b, s, h, d = roped_query.shape
                 h1, w1 = grid_sizes[0, 1].item(), grid_sizes[0, 2].item()
