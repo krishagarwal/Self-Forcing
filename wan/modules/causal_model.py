@@ -919,7 +919,6 @@ class CausalWanSelfAttention(nn.Module):
             curr_k = kv_cache["k"][:, max(0, local_end_index - self.max_attention_size):local_end_index]
             curr_v = kv_cache["v"][:, max(0, local_end_index - self.max_attention_size):local_end_index]
             if self.disable_monarch or (self.use_dense_init and curr_k.size(1) == (3 * grid_sizes[0, 1].item() * grid_sizes[0, 2].item())):
-                print("dense init")
                 x = attention(
                     roped_query,
                     curr_k,
