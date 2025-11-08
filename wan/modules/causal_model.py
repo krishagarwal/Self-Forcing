@@ -18,6 +18,8 @@ import math
 import torch.distributed as dist
 from einops import rearrange
 import os
+from .sparse_videogen.attention import sparse_attention, Wan_SparseAttn, prepare_flexattention, prepare_dense_attention
+from .sparse_videogen.utils import get_attention_mask, sparsity_to_width
 
 # class MonarchAttnImplicitFn(torch.autograd.Function):
 #     @staticmethod
@@ -923,7 +925,72 @@ class CausalWanSelfAttention(nn.Module):
             #           ptr, "to", kv_cache["k"].data_ptr())
             curr_k = kv_cache["k"][:, max(0, local_end_index - self.max_attention_size):local_end_index]
             curr_v = kv_cache["v"][:, max(0, local_end_index - self.max_attention_size):local_end_index]
-            if self.disable_monarch or (self.use_dense_init and curr_k.size(1) == (3 * grid_sizes[0, 1].item() * grid_sizes[0, 2].item())):
+            if self.use_svg:
+                if Wan_SparseAttn.curr_seq_len != curr_k.size(1):
+                    sample_mse_max_row = 10000
+                    Wan_SparseAttn.num_sampled_rows = 64
+                    Wan_SparseAttn.sample_mse_max_row = sample_mse_max_row
+                    num_frame_patches = curr_k.size(1) // (30 * 52)
+                    frame_patches_one_frame = 30 * 52
+                    masks = ["spatial", "temporal"]
+                    Wan_SparseAttn.attention_masks = [
+                        get_attention_mask(
+                            mask_name, sample_mse_max_row, 0, num_frame_patches, frame_patches_one_frame
+                        )
+                        for mask_name in masks
+                    ]
+                    Wan_SparseAttn.first_layers_fp = 0.025
+                    Wan_SparseAttn.first_times_fp = 0.075
+
+                    multiplier = diag_width = sparsity_to_width(
+                        0.25, 0, num_frame_patches, frame_patches_one_frame
+                    )
+                    Wan_SparseAttn.context_length = 0
+                    Wan_SparseAttn.num_frame = num_frame_patches
+                    Wan_SparseAttn.frame_size = frame_patches_one_frame
+                    Wan_SparseAttn.block_mask = prepare_flexattention(
+                        1,
+                        12,
+                        128,
+                        q.dtype,
+                        q.device,
+                        0,
+                        0,
+                        num_frame_patches,
+                        frame_patches_one_frame,
+                        diag_width,
+                        multiplier
+                    )
+                    Wan_SparseAttn.dense_block_mask = prepare_dense_attention(
+                        1,
+                        12,
+                        128,
+                        q.dtype,
+                        q.device,
+                        0,
+                        0,
+                        num_frame_patches,
+                        frame_patches_one_frame,
+                    )
+                    Wan_SparseAttn.curr_seq_len = curr_k.size(1)
+
+                padded_q = torch.nn.functional.pad(
+                    roped_query, (0, 0, 0, 0, curr_k.size(1) - roped_query.size(1), 0), value=0.0
+                )
+                assert padded_q.shape == curr_k.shape
+                # padded_q = padded_q.transpose(1, 2).contiguous()
+                # curr_k = curr_k.transpose(1, 2).contiguous()
+                # curr_v = curr_v.transpose(1, 2).contiguous()
+                x = sparse_attention(
+                    padded_q,
+                    curr_k,
+                    curr_v,
+                    layer_idx=self.block_num,
+                    timestep=0,
+                )
+                x = x[:, -roped_query.size(1):, :, :]
+                assert x.shape == roped_query.shape
+            elif self.disable_monarch or (self.use_dense_init and curr_k.size(1) == (3 * grid_sizes[0, 1].item() * grid_sizes[0, 2].item())):
                 x = attention(
                     roped_query,
                     curr_k,
