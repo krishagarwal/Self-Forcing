@@ -710,6 +710,8 @@ class CausalWanSelfAttention(nn.Module):
         self.init_w_reduce = os.getenv("MONARCH_ATTN_INIT_W_REDUCE")
         if self.init_w_reduce is not None:
             self.init_w_reduce = int(self.init_w_reduce)
+        self.use_framewise = bool(int(os.getenv("MONARCH_ATTN_FRAMEWISE", "0")))
+        assert not (self.use_framewise and self.use_initialize), "Framewise already enabled, init does not make sense"
         self.disable_monarch = bool(int(os.getenv("DISABLE_MONARCH_ATTN", "0")))
         layer_disable_list = os.getenv("MONARCH_ATTN_DISABLE_LAYERS")
         if layer_disable_list is not None:
@@ -717,6 +719,8 @@ class CausalWanSelfAttention(nn.Module):
             layer_disable_list = [int(x) for x in layer_disable_list.split(",")]
             if block_num in layer_disable_list:
                 self.disable_monarch = True
+        self.use_svg = bool(int(os.getenv("USE_SVG", "0")))
+        self.block_num = block_num
 
         # layers
         self.q = nn.Linear(dim, dim)
@@ -729,25 +733,26 @@ class CausalWanSelfAttention(nn.Module):
     def get_block_sizes(self, h, w, q_seq_len, k_seq_len):
         q_frames = q_seq_len // (h * w)
         k_frames = k_seq_len // (h * w)
+        cross_frame = 1 if self.use_framewise else q_frames
         # regular factors test
         if self.target_sparsity is None:
             return (h, w)
         if self.target_sparsity == 0.95:
             if k_frames == q_frames and self.use_initialize:
                 return (h, w)
-            return (q_seq_len // w, w)
+            return (cross_frame * h, w)
         if self.target_sparsity == 0.9:
-            return (h // 2, 2 * w)
+            return (cross_frame * h // 2, 2 * w)
         if self.target_sparsity == 0.85:
             assert w % self.w_reduce == 0
             if k_frames == q_frames and self.use_initialize:
                 return (h, w // 2)
-            return (q_seq_len // w, w // self.w_reduce)
+            return (cross_frame * h, w // self.w_reduce)
         elif self.target_sparsity == 0.75:
             assert h % self.h_reduce == 0
             if k_frames == q_frames and self.use_initialize:
                 return ((1, h // self.h_reduce), w)
-            return ((q_frames, h // self.h_reduce), w)
+            return ((cross_frame, h // self.h_reduce), w)
         else:
             is_init = k_frames == q_frames
             h_reduce = self.h_reduce if (not is_init or self.init_h_reduce is None) else self.init_h_reduce
@@ -755,7 +760,7 @@ class CausalWanSelfAttention(nn.Module):
             assert h % h_reduce == 0 and w % w_reduce == 0
             if k_frames == q_frames and self.use_initialize:
                 return ((1, h // h_reduce), w // w_reduce)
-            return ((q_frames, h // h_reduce), w // w_reduce)
+            return ((cross_frame, h // h_reduce), w // w_reduce)
         # factors = [i for i in range(1, h + 1) if h % i == 0]
         # sparsities = [1 - (f*f*w + w*w*f)/(f*f*w*w) for f in factors]
         # dists = [abs(s - self.target_sparsity) for s in sparsities]
