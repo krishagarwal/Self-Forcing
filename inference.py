@@ -35,6 +35,8 @@ parser.add_argument("--seed", type=int, default=0, help="Random seed")
 parser.add_argument("--num_samples", type=int, default=1, help="Number of samples to generate per prompt")
 parser.add_argument("--save_with_index", action="store_true",
                     help="Whether to save the video using the index or prompt as the filename")
+parser.add_argument("--idx_start" , type=int, default=0, help="Starting index for processing prompts")
+parser.add_argument("--idx_end", type=int, default=-1, help="Ending index for processing prompts")
 args = parser.parse_args()
 
 # Initialize distributed inference
@@ -86,7 +88,7 @@ else:
 pipeline.generator.to(device=gpu)
 pipeline.vae.to(device=gpu)
 
-
+delete_data_path = False
 # Create dataset
 if args.i2v:
     assert not dist.is_initialized(), "I2V does not support distributed inference yet"
@@ -97,6 +99,16 @@ if args.i2v:
     ])
     dataset = TextImagePairDataset(args.data_path, transform=transform)
 else:
+    if args.idx_end != -1 or args.idx_start != 0:
+        # make temp file with selected prompts
+        with open(args.data_path, 'r') as f:
+            lines = f.readlines()
+        selected_lines = lines[args.idx_start:args.idx_end if args.idx_end != -1 else len(lines)]
+        temp_prompt_path = f'temp_prompts_{local_rank}.txt'
+        with open(temp_prompt_path, 'w') as f:
+            f.writelines(selected_lines)
+        args.data_path = temp_prompt_path
+        delete_data_path = True
     dataset = TextDataset(prompt_path=args.data_path, extended_prompt_path=args.extended_prompt_path)
 num_prompts = len(dataset)
 print(f"Number of prompts: {num_prompts}")
@@ -203,7 +215,7 @@ for i, batch_data in tqdm(enumerate(dataloader), disable=(local_rank != 0)):
         for seed_idx in range(args.num_samples):
             # All processes save their videos
             if args.save_with_index:
-                output_path = os.path.join(args.output_folder, f'{idx}-{seed_idx}_{model}.mp4')
+                output_path = os.path.join(args.output_folder, f'{idx+args.idx_start}-{seed_idx}_{model}.mp4')
             else:
                 output_path = os.path.join(args.output_folder, f'{prompt[:100]}-{seed_idx}.mp4')
             write_video(output_path, video[seed_idx], fps=16)
