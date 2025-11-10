@@ -716,6 +716,9 @@ class CausalWanSelfAttention(nn.Module):
         assert not (self.use_framewise and self.use_initialize), "Framewise already enabled, init does not make sense"
         self.disable_monarch = bool(int(os.getenv("DISABLE_MONARCH_ATTN", "0")))
         layer_disable_list = os.getenv("MONARCH_ATTN_DISABLE_LAYERS")
+        self.topk = os.getenv("ATTN_TOPK_PCT")
+        if self.topk is not None:
+            self.topk = float(self.topk)
         if layer_disable_list is not None:
             assert block_num is not None
             layer_disable_list = [int(x) for x in layer_disable_list.split(",")]
@@ -991,11 +994,18 @@ class CausalWanSelfAttention(nn.Module):
                 x = x[:, -roped_query.size(1):, :, :]
                 assert x.shape == roped_query.shape
             elif self.disable_monarch or (self.use_dense_init and curr_k.size(1) == (3 * grid_sizes[0, 1].item() * grid_sizes[0, 2].item())):
-                x = attention(
-                    roped_query,
-                    curr_k,
-                    curr_v
-                )
+                if self.topk is not None:
+                    qk = torch.einsum('bihd,bjhd->bhij', roped_query, curr_k) * (d ** -0.5)
+                    _, bottomk = qk.topk(dim=-1, k=int(self.topk * qk.size(-1)), largest=False)
+                    qk.scatter_(-1, bottomk, -torch.inf)
+                    attn = torch.softmax(qk, dim=-1)
+                    x = torch.einsum('bhij,bjhd->bihd', attn, curr_v)
+                else:
+                    x = attention(
+                        roped_query,
+                        curr_k,
+                        curr_v
+                    )
             else:
                 block_b1, block_b2 = self.get_block_sizes(grid_sizes[0, 1].item(), grid_sizes[0, 2].item(), q.size(1), curr_k.size(1))
                 # block_b1 = grid_sizes[0, 1]
