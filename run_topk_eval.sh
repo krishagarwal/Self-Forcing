@@ -9,7 +9,7 @@ for gpu in {0..7}; do
 
     echo "GPU $gpu handling idx [$start, $end)"
 
-    for topk in 0.05 0.1 0.15 0.2 0.25 0.3; do
+    for topk in 0.9 1.0; do
       outdir=topk_eval/$topk
       mkdir -p "$outdir"
 
