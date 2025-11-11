@@ -13,6 +13,7 @@ for gpu in {0..7}; do
       outdir=topk_eval/$topk
       mkdir -p "$outdir"
 
+      export ATTN_TOPK_PCT=$topk
       python inference.py \
         --config_path configs/self_forcing_sid.yaml \
         --checkpoint_path checkpoints/self_forcing_dmd.pt \

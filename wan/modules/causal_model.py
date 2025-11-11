@@ -996,7 +996,7 @@ class CausalWanSelfAttention(nn.Module):
             elif self.disable_monarch or (self.use_dense_init and curr_k.size(1) == (3 * grid_sizes[0, 1].item() * grid_sizes[0, 2].item())):
                 if self.topk is not None:
                     qk = torch.einsum('bihd,bjhd->bhij', roped_query, curr_k) * (d ** -0.5)
-                    _, bottomk = qk.topk(dim=-1, k=int(self.topk * qk.size(-1)), largest=False)
+                    _, bottomk = qk.topk(dim=-1, k=int((1 - self.topk) * qk.size(-1)), largest=False)
                     qk.scatter_(-1, bottomk, -torch.inf)
                     attn = torch.softmax(qk, dim=-1)
                     x = torch.einsum('bhij,bjhd->bihd', attn, curr_v)
