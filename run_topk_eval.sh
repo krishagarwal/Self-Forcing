@@ -9,10 +9,11 @@ for gpu in {0..7}; do
 
     echo "GPU $gpu handling idx [$start, $end)"
 
-    for topk in 0.9 1.0; do
+    for topk in 0.05 0.1 0.15 0.2 0.25 0.3; do
       outdir=topk_eval/$topk
       mkdir -p "$outdir"
 
+      export DISABLE_MONARCH_ATTN=1
       export ATTN_TOPK_PCT=$topk
       python inference.py \
         --config_path configs/self_forcing_sid.yaml \
