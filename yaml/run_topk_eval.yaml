@@ -33,8 +33,8 @@ spec:
                   - matchExpressions:
                       - key: node.kubernetes.io/instance-type
                         operator: In
-                        values:
-                          - mziyadi-lmsys
+                        values: 
+                          - p5en.48xlarge
           tolerations:
             - key: mziyadi-lmsys
               operator: Equal

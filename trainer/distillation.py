@@ -483,13 +483,14 @@ class Trainer:
         barrier()
 
     def train(self):
+        pct = os.environ.get("ATTN_TOPK_PCT", None)
         start_step = self.step
 
         while self.step <= 0:
             if self.step % 100 == 0 and not (self.disable_wandb or self.val_prompts is None):
                 self.run_validation()
                 if self.generator_ema is not None:
-                    with self.use_generator_ema():
+                    with self.use_generator_ema(f"validation_videos_topk_pct_{pct}"):
                         self.run_validation("validation_videos_ema")
 
             TRAIN_GENERATOR = self.step % self.config.dfake_gen_update_ratio == 0
