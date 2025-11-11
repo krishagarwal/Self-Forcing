@@ -485,7 +485,7 @@ class Trainer:
     def train(self):
         start_step = self.step
 
-        while self.step <= 800:
+        while self.step <= 0:
             if self.step % 100 == 0 and not (self.disable_wandb or self.val_prompts is None):
                 self.run_validation()
                 if self.generator_ema is not None:
