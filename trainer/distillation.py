@@ -183,10 +183,10 @@ class Trainer:
                 state_dict = {f"model.{k}" : v for k, v in state_dict.items()}
             else:
                 state_dict = torch.load(checkpoint_path, map_location="cpu")
-            if "generator_ema" in state_dict and self.generator_ema is not None:
-                self.generator_ema.load_state_dict(
-                    state_dict["generator_ema"], strict=True
-                )
+            # if "generator_ema" in state_dict and self.generator_ema is not None:
+            #     self.generator_ema.load_state_dict(
+            #         state_dict["generator_ema"], strict=True
+            #     )
             if "critic" in state_dict:
                 self.model.fake_score.load_state_dict(
                     state_dict["critic"], strict=True
