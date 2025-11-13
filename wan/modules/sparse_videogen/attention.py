@@ -74,7 +74,7 @@ class Wan_SparseAttn:
 
         cfg, num_heads, seq_len, dim = query.size()
         num_sampled_rows = min(self.num_sampled_rows, seq_len)
-        sampled_rows = torch.randint(low=seq_len - 3*30*52, high=min(self.sample_mse_max_row, seq_len), size=(num_sampled_rows,))
+        sampled_rows = torch.randint(low=max(0, self.sample_mse_min_row), high=min(self.sample_mse_max_row, seq_len), size=(num_sampled_rows,))
         sampled_q = query[:, :, sampled_rows, :]
         sampled_qk_scores = torch.matmul(sampled_q, key.transpose(-2, -1)) / (dim**0.5)
 
