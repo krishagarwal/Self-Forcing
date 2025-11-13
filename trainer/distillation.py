@@ -239,7 +239,7 @@ class Trainer:
         else:
             self.benchmark_prompts = None
             self.benchmark_samples = 0
-        
+
         self.inference_only = getattr(config, "inference_only", False)
 
     def send_object(self, obj, dst: int) -> None:
@@ -526,6 +526,37 @@ class Trainer:
         self.model.generator.train()
         barrier()
 
+    def run_final_validation(self, prompts=None, samples=1, filename_fn=None):
+        with torch.no_grad():
+            self.model.generator.eval()
+            prompts = prompts if prompts is not None else self.val_prompts
+            bsz_per_gpu = max(1, (len(prompts) + self.world_size - 1) // self.world_size)
+            local_prompts = prompts[self.global_rank * bsz_per_gpu: (self.global_rank + 1) * bsz_per_gpu]
+            for sample_num in range(samples):
+                validation = []
+                for prompt in local_prompts:
+                    validation.append(
+                        self.generate_video(
+                            self.val_pipeline,
+                            prompts=[prompt],
+                        )
+                    )
+                if len(local_prompts) < bsz_per_gpu:
+                    for _ in range(bsz_per_gpu - len(local_prompts)):
+                        self.generate_video(
+                            self.val_pipeline,
+                            prompts=["dummy_prompt"],
+                        )
+                all_prompts = list(local_prompts)
+                all_videos = list(validation)
+                all_videos = np.concatenate(all_videos, axis=0)
+                for i, prompt in enumerate(all_prompts):
+                    filename = f"/workspace/temp_{self.step}_{i}_{sample_num}.mp4" if filename_fn is None else filename_fn(self.step, i, sample_num, prompt)
+                    write_video(filename, all_videos[i], fps=16)
+
+        self.model.generator.train()
+        barrier()
+
     def train(self):
         start_step = self.step
 
@@ -616,14 +647,14 @@ class Trainer:
                 os.makedirs("/workspace/vbench_videos_ema", exist_ok=True)
                 with self.use_generator_ema():
                     filename_fn = lambda step, i, sample_num, prompt: f"/workspace/vbench_videos_ema/{prompt}-{sample_num}.mp4"
-                    self.run_validation("vbench_videos_ema", prompts=self.benchmark_prompts, samples=self.benchmark_samples, upload=False, filename_fn=filename_fn)
-                    if self.is_main_process:
+                    self.run_final_validation(prompts=self.benchmark_prompts, samples=self.benchmark_samples, filename_fn=filename_fn)
+                    if self.local_rank == 0:
                         os.system(f"aws s3 cp /workspace/vbench_videos_ema s3://agi-mm-training-shared-us-east-2/beidchen/data/{self.run_name}_ema_vbench_videos/ --region us-east-2 --recursive")
+
             os.makedirs("/workspace/vbench_videos", exist_ok=True)
             filename_fn = lambda step, i, sample_num, prompt: f"/workspace/vbench_videos/{prompt}-{sample_num}.mp4"
-            self.run_validation("vbench_videos", prompts=self.benchmark_prompts, samples=self.benchmark_samples, upload=False, filename_fn=filename_fn)
-
-            if self.is_main_process:
+            self.run_final_validation(prompts=self.benchmark_prompts, samples=self.benchmark_samples, filename_fn=filename_fn)
+            if self.local_rank == 0:
                 os.system(f"aws s3 cp /workspace/vbench_videos s3://agi-mm-training-shared-us-east-2/beidchen/data/{self.run_name}_vbench_videos/ --region us-east-2 --recursive")
 
         torch.distributed.destroy_process_group(self.cpu_group)
