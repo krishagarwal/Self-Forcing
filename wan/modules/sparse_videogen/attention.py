@@ -58,6 +58,7 @@ class Wan_SparseAttn:
     first_layers_fp = 0
     first_times_fp = 0
 
+    sample_mse_min_row = 0
     sample_mse_max_row = 10000
     block_mask = None
 
