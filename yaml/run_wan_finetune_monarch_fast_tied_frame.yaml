@@ -10,7 +10,7 @@ spec:
     maxReplicas: 8
     maxRestarts: 8
     nProcPerNode: &gpus_per_node 8
-    rdzvId: beidchen-train-rl-sf-custom-fast-final-10
+    rdzvId: beidchen-train-rl-sf-custom-fast-final-20
   runPolicy:
     ttlSecondsAfterFinished: 180 # give enough time to push any logs
     schedulingPolicy:
