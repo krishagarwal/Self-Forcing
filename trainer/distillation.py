@@ -193,7 +193,10 @@ class Trainer:
                 self.model.fake_score.load_state_dict(
                     state_dict["critic"], strict=True
                 )
-            if "generator" in state_dict:
+            init_ema = getattr(config, "init_ema", False)
+            if init_ema and "generator_ema" in state_dict:
+                state_dict = state_dict["generator_ema"]
+            elif "generator" in state_dict:
                 state_dict = state_dict["generator"]
             elif "model" in state_dict:
                 state_dict = state_dict["model"]
@@ -233,6 +236,8 @@ class Trainer:
         else:
             self.benchmark_prompts = None
             self.benchmark_samples = 0
+        
+        self.inference_only = getattr(config, "inference_only", False)
 
     def send_object(self, obj, dst: int) -> None:
         """Send the input object list to the destination rank."""
@@ -517,6 +522,9 @@ class Trainer:
                 if self.generator_ema is not None:
                     with self.use_generator_ema():
                         self.run_validation("validation_videos_ema")
+            
+            if self.inference_only:
+                break
 
             TRAIN_GENERATOR = self.step % self.config.dfake_gen_update_ratio == 0
 
