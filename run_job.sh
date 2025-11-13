@@ -53,4 +53,4 @@ kubectl apply -f yaml/run_self_forcing_radial_attn_nohack.yaml
 kubectl apply -f yaml/run_self_forcing_radial_attn.yaml
 kubectl apply -f yaml/run_self_forcing_svg_nohack.yaml
 kubectl apply -f yaml/run_self_forcing_svg.yaml
-kubectl apply -f yaml/run_self_forcing_topk.yaml
+# kubectl apply -f yaml/run_self_forcing_topk.yaml
