@@ -479,15 +479,17 @@ class Trainer:
                     all_prompts = local_prompts
                     all_videos = [validation]
 
-                    for rank in range(8, self.world_size, 8):
+                    for rank in range(1, self.world_size):
                         recv_prompts = self.recv_object(src=rank)
                         recv_videos = self.recv_object(src=rank)
                         all_prompts.extend(recv_prompts)
                         all_videos.append(recv_videos)
 
+                    barrier()
+
                     all_videos = np.concatenate(all_videos, axis=0)
                     if broadcast:
-                        for dst in range(1, self.world_size):
+                        for dst in range(8, self.world_size, 8):
                             self.send_object(all_prompts, dst=dst)
                             self.send_object(all_videos, dst=dst)
 
@@ -503,6 +505,7 @@ class Trainer:
                 else:
                     self.send_object(local_prompts, dst=0)
                     self.send_object(validation, dst=0)
+                    barrier()
                     if broadcast and self.local_rank == 0:
                         all_prompts = self.recv_object(src=0)
                         all_videos = self.recv_object(src=0)

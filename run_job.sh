@@ -36,4 +36,9 @@ kubectl apply -f yaml/run_monarch_fast_framewise_dense_init.yaml
 # kubectl apply -f yaml/run_monarch_fast_framewise_reduced_lowsparse_init.yaml
 # kubectl apply -f yaml/run_monarch_fast_framewise_lowsparse_init.yaml
 # kubectl apply -f yaml/run_topk_eval.yaml
-kubectl apply -f yaml/run_monarch_oracle.yaml
+kubectl apply -f yaml/run_monarch_oracle0.yaml
+kubectl apply -f yaml/run_monarch_oracle1.yaml
+kubectl apply -f yaml/run_monarch_oracle2.yaml
+kubectl apply -f yaml/run_monarch_oracle3.yaml
+kubectl apply -f yaml/run_monarch_oracle4.yaml
+kubectl apply -f yaml/run_monarch_oracle5.yaml

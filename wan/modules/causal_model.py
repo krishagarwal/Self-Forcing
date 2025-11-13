@@ -945,11 +945,12 @@ class CausalWanSelfAttention(nn.Module):
                         curr_v
                     )
             elif self.use_svg:
-                if Wan_SparseAttn.curr_seq_len != curr_k.size(1):
+                target_seq_len = 21 * 30 * 52 # curr_k.size(1)
+                if Wan_SparseAttn.curr_seq_len != target_seq_len:
                     sample_mse_max_row = 10000
                     Wan_SparseAttn.num_sampled_rows = 64
                     Wan_SparseAttn.sample_mse_max_row = sample_mse_max_row
-                    num_frame_patches = curr_k.size(1) // (30 * 52)
+                    num_frame_patches = target_seq_len // (30 * 52)
                     frame_patches_one_frame = 30 * 52
                     masks = ["spatial", "temporal"]
                     Wan_SparseAttn.attention_masks = [
@@ -962,7 +963,7 @@ class CausalWanSelfAttention(nn.Module):
                     Wan_SparseAttn.first_times_fp = 0
 
                     multiplier = diag_width = sparsity_to_width(
-                        0.1, 0, num_frame_patches, frame_patches_one_frame
+                        0.15, 0, num_frame_patches, frame_patches_one_frame
                     )
                     Wan_SparseAttn.context_length = 0
                     Wan_SparseAttn.num_frame = num_frame_patches
@@ -991,12 +992,24 @@ class CausalWanSelfAttention(nn.Module):
                         num_frame_patches,
                         frame_patches_one_frame,
                     )
-                    Wan_SparseAttn.curr_seq_len = curr_k.size(1)
+                    Wan_SparseAttn.curr_seq_len = target_seq_len
 
+                # padded_q = torch.nn.functional.pad(
+                #     roped_query, (0, 0, 0, 0, curr_k.size(1) - roped_query.size(1), 0), value=0.0
+                # )
+                # assert padded_q.shape == curr_k.shape
+                
                 padded_q = torch.nn.functional.pad(
-                    roped_query, (0, 0, 0, 0, curr_k.size(1) - roped_query.size(1), 0), value=0.0
+                    roped_query, (0, 0, 0, 0, curr_k.size(1) - roped_query.size(1), 21 * 30 * 52 - curr_k.size(1)), value=0.0
                 )
-                assert padded_q.shape == curr_k.shape
+                padded_k = torch.nn.functional.pad(
+                    curr_k, (0, 0, 0, 0, 0, 21 * 30 * 52 - curr_k.size(1)), value=0.0
+                )
+                padded_v = torch.nn.functional.pad(
+                    curr_v, (0, 0, 0, 0, 0, 21 * 30 * 52 - curr_v.size(1)), value=0.0
+                )
+                assert padded_q.shape == padded_k.shape
+
                 # padded_q = padded_q.transpose(1, 2).contiguous()
                 # curr_k = curr_k.transpose(1, 2).contiguous()
                 # curr_v = curr_v.transpose(1, 2).contiguous()
@@ -1007,7 +1020,8 @@ class CausalWanSelfAttention(nn.Module):
                     layer_idx=self.block_num,
                     timestep=0,
                 )
-                x = x[:, -roped_query.size(1):, :, :]
+                # x = x[:, -roped_query.size(1):, :, :]
+                x = x[:, curr_k.size(1) - roped_query.size(1) : curr_k.size(1), :, :]
                 assert x.shape == roped_query.shape
             elif self.use_radial_attn:
                 # self.mask_map = MaskMap(video_token_num=curr_k.size(1), num_frame=(curr_k.size(1) // (30 * 52)))
