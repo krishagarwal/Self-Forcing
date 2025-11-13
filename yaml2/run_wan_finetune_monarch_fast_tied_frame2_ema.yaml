@@ -36,7 +36,7 @@ spec:
                         values:
                           - p5en.48xlarge
           tolerations:
-            - key: guparpit-nb-swe-ac
+            - key: barijit-no-nvme-update-nnc7
               operator: Equal
               value: "True"
               effect: NoSchedule
