@@ -531,6 +531,7 @@ class Trainer:
             self.model.generator.eval()
             prompts = prompts if prompts is not None else self.val_prompts
             bsz_per_gpu = max(1, (len(prompts) + self.world_size - 1) // self.world_size)
+            print(f"rank {self.global_rank} processing {self.global_rank * bsz_per_gpu} to {(self.global_rank + 1) * bsz_per_gpu}")
             local_prompts = prompts[self.global_rank * bsz_per_gpu: (self.global_rank + 1) * bsz_per_gpu]
             for sample_num in range(samples):
                 validation = []
@@ -655,6 +656,8 @@ class Trainer:
             filename_fn = lambda step, i, sample_num, prompt: f"/workspace/vbench_videos/{prompt}-{sample_num}.mp4"
             self.run_final_validation(prompts=self.benchmark_prompts, samples=self.benchmark_samples, filename_fn=filename_fn)
             if self.local_rank == 0:
+                print(f"uploading data from rank {self.global_rank}")
+                os.system("ls -l /workspace/vbench_videos | wc -l")
                 os.system(f"aws s3 cp /workspace/vbench_videos s3://agi-mm-training-shared-us-east-2/beidchen/data/{self.run_name}_vbench_videos/ --region us-east-2 --recursive")
 
         torch.distributed.destroy_process_group(self.cpu_group)
