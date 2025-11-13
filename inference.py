@@ -219,3 +219,6 @@ for i, batch_data in tqdm(enumerate(dataloader), disable=(local_rank != 0)):
             else:
                 output_path = os.path.join(args.output_folder, f'{prompt[:100]}-{seed_idx}.mp4')
             write_video(output_path, video[seed_idx], fps=16)
+
+if delete_data_path:
+    os.remove(temp_prompt_path)

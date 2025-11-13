@@ -105,8 +105,6 @@ spec:
                   mkdir -p /workspace/wandb &&
                   export WANDB_DIR=/workspace/wandb &&
                   cp -r /checkpoints-fsx/beidchen-sandbox/video/self_forcing /workspace &&
-                  cd /code-fsx/beidchen-sandbox/VBench &&
-                  pip install VBench &&
                   cd /code-fsx/beidchen-sandbox/Self-Forcing &&
                   pip install -r requirements.txt &&
                   pip install flashinfer-python &&
@@ -115,10 +113,7 @@ spec:
                   mkdir -p /code-fsx/beidchen-sandbox/self_forcing_logs/self_forcing_dmd_test &&
                   export DISABLE_MONARCH_ATTN=1 &&
                   export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True &&
-                  torchrun --nproc_per_node=8 --rdzv-conf="timeout=7200,read_timeout=7200,join_timeout=7200" train.py --wandb-save-dir /workspace/wandb --config_path configs/self_forcing_inference_only_test.yaml --logdir /code-fsx/beidchen-sandbox/self_forcing_logs/self_forcing_dmd_test --wandb_name dmd_regular | tee /code-fsx/beidchen-sandbox/self_forcing_dmd_test.log
-                  cd /code-fsx/beidchen-sandbox/VBench &&
-                  export HF_HOME=/workspace &&
-                  torchrun --nproc_per_node=8 --rdzv-conf="timeout=7200,read_timeout=7200,join_timeout=7200" evaluate.py --output_path /code-fsx/beidchen-sandbox/vbench_eval_results/self_forcing_dmd_test --videos_path /workspace/vbench_videos --dimension subject_consistency background_consistency temporal_flickering motion_smoothness dynamic_degree aesthetic_quality imaging_quality object_class multiple_objects human_action color spatial_relationship scene temporal_style appearance_style overall_consistency --mode vbench_standard | tee /code-fsx/beidchen-sandbox/self_forcing_dmd_test_vbench.log
+                  torchrun --nproc_per_node=8 --rdzv-conf="timeout=7200,read_timeout=7200,join_timeout=7200" train.py --wandb-save-dir /workspace/wandb --config_path configs/self_forcing_inference_only_test.yaml --logdir /code-fsx/beidchen-sandbox/self_forcing_logs/self_forcing_dmd_test --wandb_name dmd_regular_test | tee /code-fsx/beidchen-sandbox/self_forcing_dmd_test.log
               image: 767397878797.dkr.ecr.us-east-1.amazonaws.com/agif-mm-pt-base:reasoning-vllm.sglang.megatron.deepseek.video.fa3
               imagePullPolicy: Always
               securityContext:
