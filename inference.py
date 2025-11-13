@@ -198,7 +198,7 @@ for i, batch_data in tqdm(enumerate(dataloader), disable=(local_rank != 0)):
         )
         torch.cuda.synchronize()
         end_time = time.time()
-        print(f"Inference time: {end_time - start_time} seconds")
+        print(f"Inference time: {end_time - start_time:.6f} seconds")
     else:
         assert initial_latent is None, "I2V not supported for bidirectional model"
         torch.cuda.synchronize()
@@ -210,7 +210,7 @@ for i, batch_data in tqdm(enumerate(dataloader), disable=(local_rank != 0)):
         )
         torch.cuda.synchronize()
         end_time = time.time()
-        print(f"Inference time: {end_time - start_time} seconds")
+        print(f"Inference time: {end_time - start_time:.6f} seconds")
     current_video = rearrange(video, 'b t c h w -> b t h w c').cpu()
     all_video.append(current_video)
     num_generated_frames += latents.shape[1]
