@@ -184,7 +184,11 @@ for i, batch_data in tqdm(enumerate(dataloader), disable=(local_rank != 0)):
 
     # Generate 81 frames
 
+    import time
+
     if config.causal:
+        torch.cuda.synchronize()
+        start_time = time.time()
         video, latents = pipeline.inference(
             noise=sampled_noise,
             text_prompts=prompts,
@@ -192,13 +196,21 @@ for i, batch_data in tqdm(enumerate(dataloader), disable=(local_rank != 0)):
             initial_latent=initial_latent,
             low_memory=low_memory,
         )
+        torch.cuda.synchronize()
+        end_time = time.time()
+        print(f"Inference time: {end_time - start_time} seconds")
     else:
         assert initial_latent is None, "I2V not supported for bidirectional model"
+        torch.cuda.synchronize()
+        start_time = time.time()
         video, latents = pipeline.inference(
             noise=sampled_noise,
             text_prompts=prompts,
             return_latents=True,
         )
+        torch.cuda.synchronize()
+        end_time = time.time()
+        print(f"Inference time: {end_time - start_time} seconds")
     current_video = rearrange(video, 'b t c h w -> b t h w c').cpu()
     all_video.append(current_video)
     num_generated_frames += latents.shape[1]
