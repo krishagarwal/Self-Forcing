@@ -525,15 +525,12 @@ class Trainer:
     def train(self):
         start_step = self.step
 
-        while self.step <= 700:
+        while self.step <= 700 and not self.inference_only:
             if self.step % 100 == 0 and not (self.disable_wandb or self.val_prompts is None):
                 self.run_validation()
                 if self.generator_ema is not None:
                     with self.use_generator_ema():
                         self.run_validation("validation_videos_ema")
-            
-            if self.inference_only:
-                break
 
             TRAIN_GENERATOR = self.step % self.config.dfake_gen_update_ratio == 0
 
@@ -621,7 +618,7 @@ class Trainer:
             self.run_validation("vbench_videos", prompts=self.benchmark_prompts, samples=self.benchmark_samples, upload=False, filename_fn=filename_fn)
 
             if self.is_main_process:
-                os.system(f"aws s3 cp /workspace/vbench_videos s3://beidchen-sandbox/{self.run_name}_vbench_videos/ --recursive")
+                os.system(f"aws s3 cp /workspace/vbench_videos s3://agi-mm-training-shared-us-east-2/beidchen/data/{self.run_name}_vbench_videos/ --recursive")
 
         torch.distributed.destroy_process_group(self.cpu_group)
         self.cpu_group = None
