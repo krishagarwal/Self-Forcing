@@ -550,11 +550,11 @@ class Trainer:
                         )
                 all_prompts = list(local_prompts)
                 all_videos = list(validation)
-                all_videos = np.concatenate(all_videos, axis=0)
-                for i, prompt in enumerate(all_prompts):
-                    filename = f"/workspace/temp_{self.step}_{i}_{sample_num}.mp4" if filename_fn is None else filename_fn(self.step, i, sample_num, prompt)
-                    write_video(filename, all_videos[i], fps=16)
-
+                if len(all_prompts) > 0:
+                    all_videos = np.concatenate(all_videos, axis=0)
+                    for i, prompt in enumerate(all_prompts):
+                        filename = f"/workspace/temp_{self.step}_{i}_{sample_num}.mp4" if filename_fn is None else filename_fn(self.step, i, sample_num, prompt)
+                        write_video(filename, all_videos[i], fps=16)
         self.model.generator.train()
         barrier()
 
