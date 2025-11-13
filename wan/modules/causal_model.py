@@ -727,6 +727,8 @@ class CausalWanSelfAttention(nn.Module):
                 self.disable_monarch = True
         self.use_svg = bool(int(os.getenv("USE_SVG", "0")))
         self.use_radial_attn = bool(int(os.getenv("USE_RADIAL_ATTN", "0")))
+        if self.use_radial_attn:
+            self.mask_map = None
         self.block_num = block_num
 
         # layers
@@ -959,8 +961,8 @@ class CausalWanSelfAttention(nn.Module):
                         )
                         for mask_name in masks
                     ]
-                    Wan_SparseAttn.first_layers_fp = 0
-                    Wan_SparseAttn.first_times_fp = 0
+                    Wan_SparseAttn.first_layers_fp = 0.025
+                    Wan_SparseAttn.first_times_fp = 0.075
 
                     multiplier = diag_width = sparsity_to_width(
                         0.15, 0, num_frame_patches, frame_patches_one_frame
@@ -1013,12 +1015,14 @@ class CausalWanSelfAttention(nn.Module):
                 # padded_q = padded_q.transpose(1, 2).contiguous()
                 # curr_k = curr_k.transpose(1, 2).contiguous()
                 # curr_v = curr_v.transpose(1, 2).contiguous()
+                t = timestep.flatten()[0].item()
+                assert (timestep == t).all()
                 x = sparse_attention(
                     padded_q,
                     curr_k,
                     curr_v,
                     layer_idx=self.block_num,
-                    timestep=0,
+                    timestep=t,
                 )
                 # x = x[:, -roped_query.size(1):, :, :]
                 x = x[:, curr_k.size(1) - roped_query.size(1) : curr_k.size(1), :, :]
