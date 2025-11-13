@@ -62,6 +62,8 @@ class Trainer:
                 project=config.wandb_project,
                 dir=config.wandb_save_dir
             )
+        
+        self.run_name = config.config_name
 
         self.output_path = config.logdir
 
