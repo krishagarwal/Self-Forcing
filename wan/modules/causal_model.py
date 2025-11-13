@@ -20,6 +20,7 @@ from einops import rearrange
 import os
 from .sparse_videogen.attention import sparse_attention, Wan_SparseAttn, prepare_flexattention, prepare_dense_attention
 from .sparse_videogen.utils import get_attention_mask, sparsity_to_width
+from .radial_attn.attn_mask import MaskMap, RadialAttention
 
 # class MonarchAttnImplicitFn(torch.autograd.Function):
 #     @staticmethod
@@ -703,7 +704,7 @@ class CausalWanSelfAttention(nn.Module):
         if self.target_sparsity is not None:
             self.target_sparsity = float(self.target_sparsity)
         self.use_initialize = bool(int(os.getenv("MONARCH_ATTN_USE_INITIALIZE", "0")))
-        self.use_dense_init = bool(int(os.getenv("MONARCH_ATTN_USE_DENSE_INIT", "0")))
+        self.use_dense_init = bool(int(os.getenv("USE_DENSE_INIT", "0")))
         self.h_reduce = int(os.getenv("MONARCH_ATTN_H_REDUCE", "2"))
         self.w_reduce = int(os.getenv("MONARCH_ATTN_W_REDUCE", "2"))
         self.init_h_reduce = os.getenv("MONARCH_ATTN_INIT_H_REDUCE")
@@ -725,6 +726,7 @@ class CausalWanSelfAttention(nn.Module):
             if block_num in layer_disable_list:
                 self.disable_monarch = True
         self.use_svg = bool(int(os.getenv("USE_SVG", "0")))
+        self.use_radial_attn = bool(int(os.getenv("USE_RADIAL_ATTN", "0")))
         self.block_num = block_num
 
         # layers
@@ -781,7 +783,8 @@ class CausalWanSelfAttention(nn.Module):
         block_mask,
         kv_cache=None,
         current_start=0,
-        cache_start=None
+        cache_start=None,
+        timestep=None,
     ):
         r"""
         Args:
@@ -928,7 +931,20 @@ class CausalWanSelfAttention(nn.Module):
             #           ptr, "to", kv_cache["k"].data_ptr())
             curr_k = kv_cache["k"][:, max(0, local_end_index - self.max_attention_size):local_end_index]
             curr_v = kv_cache["v"][:, max(0, local_end_index - self.max_attention_size):local_end_index]
-            if self.use_svg:
+            if (self.disable_monarch and not self.use_svg and not self.use_radial_attn) or (self.use_dense_init and curr_k.size(1) == (3 * grid_sizes[0, 1].item() * grid_sizes[0, 2].item())):
+                if self.topk is not None:
+                    qk = torch.einsum('bihd,bjhd->bhij', roped_query, curr_k) * (d ** -0.5)
+                    _, bottomk = qk.topk(dim=-1, k=int((1 - self.topk) * qk.size(-1)), largest=False)
+                    qk.scatter_(-1, bottomk, -torch.inf)
+                    attn = torch.softmax(qk, dim=-1)
+                    x = torch.einsum('bhij,bjhd->bihd', attn, curr_v)
+                else:
+                    x = attention(
+                        roped_query,
+                        curr_k,
+                        curr_v
+                    )
+            elif self.use_svg:
                 if Wan_SparseAttn.curr_seq_len != curr_k.size(1):
                     sample_mse_max_row = 10000
                     Wan_SparseAttn.num_sampled_rows = 64
@@ -942,11 +958,11 @@ class CausalWanSelfAttention(nn.Module):
                         )
                         for mask_name in masks
                     ]
-                    Wan_SparseAttn.first_layers_fp = 0.025
-                    Wan_SparseAttn.first_times_fp = 0.075
+                    Wan_SparseAttn.first_layers_fp = 0
+                    Wan_SparseAttn.first_times_fp = 0
 
                     multiplier = diag_width = sparsity_to_width(
-                        0.25, 0, num_frame_patches, frame_patches_one_frame
+                        0.1, 0, num_frame_patches, frame_patches_one_frame
                     )
                     Wan_SparseAttn.context_length = 0
                     Wan_SparseAttn.num_frame = num_frame_patches
@@ -993,19 +1009,35 @@ class CausalWanSelfAttention(nn.Module):
                 )
                 x = x[:, -roped_query.size(1):, :, :]
                 assert x.shape == roped_query.shape
-            elif self.disable_monarch or (self.use_dense_init and curr_k.size(1) == (3 * grid_sizes[0, 1].item() * grid_sizes[0, 2].item())):
-                if self.topk is not None:
-                    qk = torch.einsum('bihd,bjhd->bhij', roped_query, curr_k) * (d ** -0.5)
-                    _, bottomk = qk.topk(dim=-1, k=int((1 - self.topk) * qk.size(-1)), largest=False)
-                    qk.scatter_(-1, bottomk, -torch.inf)
-                    attn = torch.softmax(qk, dim=-1)
-                    x = torch.einsum('bhij,bjhd->bihd', attn, curr_v)
-                else:
-                    x = attention(
-                        roped_query,
-                        curr_k,
-                        curr_v
-                    )
+            elif self.use_radial_attn:
+                # self.mask_map = MaskMap(video_token_num=curr_k.size(1), num_frame=(curr_k.size(1) // (30 * 52)))
+                # padded_q = torch.nn.functional.pad(
+                #     roped_query, (0, 0, 0, 0, curr_k.size(1) - roped_query.size(1), 0), value=0.0
+                # )
+                # assert padded_q.shape == curr_k.shape
+                # x = RadialAttention(
+                #     padded_q, curr_k, curr_v, self.mask_map, sparsity_type="radial", block_size=1, decay_factor=0.0, model_type="wan", pre_defined_mask=None, use_sage_attention=False
+                # )
+                # x = rearrange(x, 'b s (h d) -> b s h d', d=d)
+                # x = x[:, -roped_query.size(1):, :, :]
+                # assert x.shape == roped_query.shape
+                self.mask_map = MaskMap(video_token_num=21 * 30 * 52, num_frame=21)
+                padded_q = torch.nn.functional.pad(
+                    roped_query, (0, 0, 0, 0, curr_k.size(1) - roped_query.size(1), 21 * 30 * 52 - curr_k.size(1)), value=0.0
+                )
+                padded_k = torch.nn.functional.pad(
+                    curr_k, (0, 0, 0, 0, 0, 21 * 30 * 52 - curr_k.size(1)), value=0.0
+                )
+                padded_v = torch.nn.functional.pad(
+                    curr_v, (0, 0, 0, 0, 0, 21 * 30 * 52 - curr_v.size(1)), value=0.0
+                )
+                assert padded_q.shape == padded_k.shape
+                x = RadialAttention(
+                    padded_q, padded_k, padded_v, self.mask_map, sparsity_type="radial", block_size=1, decay_factor=0.0, model_type="wan", pre_defined_mask=None, use_sage_attention=False
+                )
+                x = rearrange(x, 'b s (h d) -> b s h d', d=d)
+                x = x[:, curr_k.size(1) - roped_query.size(1) : curr_k.size(1), :, :]
+                assert x.shape == roped_query.shape
             else:
                 block_b1, block_b2 = self.get_block_sizes(grid_sizes[0, 1].item(), grid_sizes[0, 2].item(), q.size(1), curr_k.size(1))
                 # block_b1 = grid_sizes[0, 1]
@@ -1110,7 +1142,8 @@ class CausalWanAttentionBlock(nn.Module):
         kv_cache=None,
         crossattn_cache=None,
         current_start=0,
-        cache_start=None
+        cache_start=None,
+        timestep=None,
     ):
         r"""
         Args:
@@ -1130,7 +1163,7 @@ class CausalWanAttentionBlock(nn.Module):
         y = self.self_attn(
             (self.norm1(x).unflatten(dim=1, sizes=(num_frames, frame_seqlen)) * (1 + e[1]) + e[0]).flatten(1, 2),
             seq_lens, grid_sizes,
-            freqs, block_mask, kv_cache, current_start, cache_start)
+            freqs, block_mask, kv_cache, current_start, cache_start, timestep)
 
         # with amp.autocast(dtype=torch.float32):
         x = x + (y.unflatten(dim=1, sizes=(num_frames, frame_seqlen)) * e[2]).flatten(1, 2)
@@ -1634,7 +1667,8 @@ class CausalWanModel(ModelMixin, ConfigMixin):
                     {
                         "kv_cache": kv_cache[block_index],
                         "current_start": current_start,
-                        "cache_start": cache_start
+                        "cache_start": cache_start,
+                        "timestep": t,
                     }
                 )
                 x = torch.utils.checkpoint.checkpoint(
@@ -1650,7 +1684,8 @@ class CausalWanModel(ModelMixin, ConfigMixin):
                         "kv_cache": kv_cache[block_index],
                         "crossattn_cache": crossattn_cache[block_index],
                         "current_start": current_start,
-                        "cache_start": cache_start
+                        "cache_start": cache_start,
+                        "timestep": t,
                     }
                 )
                 x = block(x, **kwargs)

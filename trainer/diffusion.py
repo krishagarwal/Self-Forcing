@@ -32,6 +32,8 @@ class Trainer:
         launch_distributed_job()
         self.global_rank = dist.get_rank()
         self.world_size = dist.get_world_size()
+        self.local_rank = int(os.environ["LOCAL_RANK"])
+        assert self.global_rank % 8 == self.local_rank
 
         self.dtype = torch.bfloat16 if config.mixed_precision else torch.float32
         self.device = torch.cuda.current_device()
@@ -143,10 +145,10 @@ class Trainer:
                 state_dict = {f"model.{k}" : v for k, v in state_dict.items()}
             else:
                 state_dict = torch.load(checkpoint_path, map_location="cpu")
-            if "generator_ema" in state_dict and self.generator_ema is not None:
-                self.generator_ema.load_state_dict(
-                    state_dict["generator_ema"], strict=True
-                )
+            # if "generator_ema" in state_dict and self.generator_ema is not None:
+            #     self.generator_ema.load_state_dict(
+            #         state_dict["generator_ema"], strict=True
+            #     )
             if "generator" in state_dict:
                 state_dict = state_dict["generator"]
             elif "model" in state_dict:
@@ -177,6 +179,15 @@ class Trainer:
             self.val_prompts = all_prompts
         else:
             self.val_prompts = None
+        
+        if config.benchmark_prompts_file is not None:
+            with open(config.benchmark_prompts_file, "r") as f:
+                all_prompts = [line.strip() for line in f.readlines()]
+            self.benchmark_prompts = all_prompts
+            self.benchmark_samples = config.benchmark_samples if hasattr(config, 'benchmark_samples') else 1
+        else:
+            self.benchmark_prompts = None
+            self.benchmark_samples = 0
 
     def send_object(self, obj, dst: int) -> None:
         """Send the input object list to the destination rank."""
@@ -381,56 +392,77 @@ class Trainer:
                 for n, p in self.model.generator.module.named_parameters():
                     p.data.copy_(backup[n].to(device=p.device, dtype=p.dtype))
 
+    def run_validation(self, label="validation_videos", prompts=None, samples=1, upload=True, broadcast=False, filename_fn=None):
+        with torch.no_grad():
+            self.model.generator.eval()
+            # prompts = [
+            #     "In the video, two people are working at a wooden desk, using an iMac computer. One person, wearing a white knit sweater, is using the apple wireless mouse with their right hand, while their left hand rests on the sleek white keyboard. Their movements are smooth yet intentional, suggesting they are focused on a task on the computer screen. The monitor displays a well-organized array of files and folders, hinting at a task that involves detailed organization or detailed data navigation. The second person, only subtly visible, sits closely by and appears to observe or assist, creating a collaborative atmosphere. Their presence adds a quiet dynamic to the scene, as if they are ready to provide input or guidance. Sticky notes with handwritten notes are attached to the monitor’s stand, adding a touch of personal organization amidst the digital workspace. The focus on the keyboard and mouse emphasizes a streamlined workflow, indicative of a productive work environment. The overall ambiance is calm and focuses on teamwork, technology, and efficient workspace management.",
+            #     "A determined climber is scaling a massive rock face, showcasing exceptional strength and skill. The person, clad in a teal shirt and dark pants, climbs with precision, their movements measured and deliberate. They are secured by climbing gear, which includes ropes and a harness, emphasizing their commitment to safety. The rugged texture of the sandy-colored rock provides an imposing backdrop, adding drama and scale to the climb. In the distance, other large rock formations and sparse vegetation can be seen under a bright, overcast sky, contributing to the natural and adventurous atmosphere. The scene captures a moment of focus and challenge, highlighting the climber's tenacity and the breathtaking environment.",
+            #     "In the video, a lone musician stands gracefully in front of a grand cathedral, playing an accordion while surrounded by the lively water display of a central fountain. Dressed in a casual ensemble, he wears a light-colored shirt, dark pants, and a flat cap that gives him a vintage charm. His posture is relaxed, yet engaged, as he sways gently in rhythm with the music, casting soft shadows on the cobblestone steps beneath him. The backdrop features the cathedral's towering twin spires, with intricate stonework that casts a rich, historical aura around the scene. Sunlight bathes the entire setting, enhancing the golden hues of the cathedral facade and creating a halo-like effect around the musician. The fountain's water jets splash playfully, catching glimmers of light and adding a dynamic element to the tranquil atmosphere. The scene captures a harmonious blend of architectural majesty and human creativity, framed by the clear, azure sky that extends infinitely above. It's a vivid depiction of solitude and artistry, set against a timeless urban landscape.",
+            #     "In the video, a fluffy dog with brown patches is intently engaged with a bright red toy shaped like a fire hydrant, which has a yellow and orange rope attached. The dog's body is relaxed as it lies on a plain white background, concentrating on nudging and playfully biting the toy. Its ears perk up slightly with curiosity, and its eyes are fixated on the toy, suggesting a scene of focused playfulness. The neutral tones of the dog's fur contrast starkly against the vivid red of the toy, creating a visually striking moment.",
+            # ]
+            
+            prompts = prompts if prompts is not None else self.val_prompts
+            bsz_per_gpu = len(prompts) // self.world_size
+            local_prompts = prompts[self.global_rank * bsz_per_gpu: (self.global_rank + 1) * bsz_per_gpu]
+            for sample_num in range(samples):
+                validation = self.generate_video(
+                    self.val_pipeline,
+                    prompts=local_prompts,
+                )
+                if self.is_main_process:
+                    all_prompts = local_prompts
+                    all_videos = [validation]
+
+                    for rank in range(8, self.world_size, 8):
+                        recv_prompts = self.recv_object(src=rank)
+                        recv_videos = self.recv_object(src=rank)
+                        all_prompts.extend(recv_prompts)
+                        all_videos.append(recv_videos)
+
+                    all_videos = np.concatenate(all_videos, axis=0)
+                    if broadcast:
+                        for dst in range(1, self.world_size):
+                            self.send_object(all_prompts, dst=dst)
+                            self.send_object(all_videos, dst=dst)
+
+                    log_videos = []
+                    for i, prompt in enumerate(all_prompts):
+                        filename = f"/workspace/temp_{self.step}_{i}_{sample_num}.mp4" if filename_fn is None else filename_fn(self.step, i, sample_num, prompt)
+                        write_video(filename, all_videos[i], fps=16)
+                        if upload:
+                            log_videos.append(wandb.Video(filename, caption=prompt))
+                    if upload:
+                        logs = { f"{label}_sample{sample_num}" if sample_num > 1 else label : log_videos }
+                        wandb.log(logs, step=self.step)
+                else:
+                    self.send_object(local_prompts, dst=0)
+                    self.send_object(validation, dst=0)
+                    if broadcast and self.local_rank == 0:
+                        all_prompts = self.recv_object(src=0)
+                        all_videos = self.recv_object(src=0)
+                        for i, prompt in enumerate(all_prompts):
+                            filename = f"/workspace/temp_{self.step}_{i}_{sample_num}.mp4" if filename_fn is None else filename_fn(self.step, i, sample_num, prompt)
+                            write_video(filename, all_videos[i], fps=16)
+
+        self.model.generator.train()
+        barrier()
+
     def train(self):
         start_step = self.step
 
         while self.step <= 1000:
             if self.step % 100 == 0 and not (self.disable_wandb or self.val_prompts is None):
-                with torch.no_grad(), self.use_generator_ema():
-                    self.model.generator.eval()
-                    # prompts = [
-                    #     "In the video, two people are working at a wooden desk, using an iMac computer. One person, wearing a white knit sweater, is using the apple wireless mouse with their right hand, while their left hand rests on the sleek white keyboard. Their movements are smooth yet intentional, suggesting they are focused on a task on the computer screen. The monitor displays a well-organized array of files and folders, hinting at a task that involves detailed organization or detailed data navigation. The second person, only subtly visible, sits closely by and appears to observe or assist, creating a collaborative atmosphere. Their presence adds a quiet dynamic to the scene, as if they are ready to provide input or guidance. Sticky notes with handwritten notes are attached to the monitor’s stand, adding a touch of personal organization amidst the digital workspace. The focus on the keyboard and mouse emphasizes a streamlined workflow, indicative of a productive work environment. The overall ambiance is calm and focuses on teamwork, technology, and efficient workspace management.",
-                    #     "A determined climber is scaling a massive rock face, showcasing exceptional strength and skill. The person, clad in a teal shirt and dark pants, climbs with precision, their movements measured and deliberate. They are secured by climbing gear, which includes ropes and a harness, emphasizing their commitment to safety. The rugged texture of the sandy-colored rock provides an imposing backdrop, adding drama and scale to the climb. In the distance, other large rock formations and sparse vegetation can be seen under a bright, overcast sky, contributing to the natural and adventurous atmosphere. The scene captures a moment of focus and challenge, highlighting the climber's tenacity and the breathtaking environment.",
-                    #     "In the video, a lone musician stands gracefully in front of a grand cathedral, playing an accordion while surrounded by the lively water display of a central fountain. Dressed in a casual ensemble, he wears a light-colored shirt, dark pants, and a flat cap that gives him a vintage charm. His posture is relaxed, yet engaged, as he sways gently in rhythm with the music, casting soft shadows on the cobblestone steps beneath him. The backdrop features the cathedral's towering twin spires, with intricate stonework that casts a rich, historical aura around the scene. Sunlight bathes the entire setting, enhancing the golden hues of the cathedral facade and creating a halo-like effect around the musician. The fountain's water jets splash playfully, catching glimmers of light and adding a dynamic element to the tranquil atmosphere. The scene captures a harmonious blend of architectural majesty and human creativity, framed by the clear, azure sky that extends infinitely above. It's a vivid depiction of solitude and artistry, set against a timeless urban landscape.",
-                    #     "In the video, a fluffy dog with brown patches is intently engaged with a bright red toy shaped like a fire hydrant, which has a yellow and orange rope attached. The dog's body is relaxed as it lies on a plain white background, concentrating on nudging and playfully biting the toy. Its ears perk up slightly with curiosity, and its eyes are fixated on the toy, suggesting a scene of focused playfulness. The neutral tones of the dog's fur contrast starkly against the vivid red of the toy, creating a visually striking moment.",
-                    # ]
-                    bsz_per_gpu = len(self.val_prompts) // self.world_size
-                    local_prompts = self.val_prompts[self.global_rank * bsz_per_gpu: (self.global_rank + 1) * bsz_per_gpu]
-                    validation = self.generate_video(
-                        self.val_pipeline,
-                        prompts=local_prompts,
-                    )
-                    if self.is_main_process:
-                        all_prompts = local_prompts
-                        all_videos = [validation]
-
-                        for rank in range(1, self.world_size):
-                            recv_prompts = self.recv_object(src=rank)
-                            recv_videos = self.recv_object(src=rank)
-                            all_prompts.extend(recv_prompts)
-                            all_videos.append(recv_videos)
-
-                        all_videos = np.concatenate(all_videos, axis=0)
-
-                        log_videos = []
-                        for i, prompt in enumerate(all_prompts):
-                            filename = f"/workspace/temp_{self.step}_{i}.mp4"
-                            write_video(filename, all_videos[i], fps=16)
-                            log_videos.append(wandb.Video(filename, caption=prompt))
-                        logs = { "validation_videos": log_videos }
-                        wandb.log(logs, step=self.step)
-                    else:
-                        self.send_object(local_prompts, dst=0)
-                        self.send_object(validation, dst=0)
-
-                self.model.generator.train()
-                barrier()
+                self.run_validation()
+                if self.generator_ema is not None:
+                    with self.use_generator_ema():
+                        self.run_validation("validation_videos_ema")
 
             batch = next(self.dataloader)
             self.train_one_step(batch)
             if (not self.config.no_save) and (self.step - start_step) > 0 and self.step % self.config.log_iters == 0:
                 torch.cuda.empty_cache()
-                self.save()
+                # self.save()
                 torch.cuda.empty_cache()
 
             barrier()
@@ -442,6 +474,15 @@ class Trainer:
                     if not self.disable_wandb:
                         wandb.log({"per iteration time": current_time - self.previous_time}, step=self.step)
                     self.previous_time = current_time
-        
+
+        if self.benchmark_prompts is not None:
+            os.makedirs("/workspace/vbench_videos_ema", exist_ok=True)
+            with self.use_generator_ema():
+                filename_fn = lambda step, i, sample_num, prompt: f"/workspace/vbench_videos_ema/{prompt}-{sample_num}.mp4"
+                self.run_validation("vbench_videos_ema", prompts=self.benchmark_prompts, samples=self.benchmark_samples, upload=False, broadcast=True, filename_fn=filename_fn)
+            os.makedirs("/workspace/vbench_videos", exist_ok=True)
+            filename_fn = lambda step, i, sample_num, prompt: f"/workspace/vbench_videos/{prompt}-{sample_num}.mp4"
+            self.run_validation("vbench_videos", prompts=self.benchmark_prompts, samples=self.benchmark_samples, upload=False, broadcast=True, filename_fn=filename_fn)
+
         torch.distributed.destroy_process_group(self.cpu_group)
         self.cpu_group = None

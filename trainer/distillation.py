@@ -35,6 +35,8 @@ class Trainer:
         launch_distributed_job()
         self.global_rank = dist.get_rank()
         self.world_size = dist.get_world_size()
+        self.local_rank = int(os.environ["LOCAL_RANK"])
+        assert self.global_rank % 8 == self.local_rank
 
         self.dtype = torch.bfloat16 if config.mixed_precision else torch.float32
         self.device = torch.cuda.current_device()
@@ -222,6 +224,15 @@ class Trainer:
             self.val_prompts = all_prompts
         else:
             self.val_prompts = None
+        
+        if config.benchmark_prompts_file is not None:
+            with open(config.benchmark_prompts_file, "r") as f:
+                all_prompts = [line.strip() for line in f.readlines()]
+            self.benchmark_prompts = all_prompts
+            self.benchmark_samples = config.benchmark_samples if hasattr(config, 'benchmark_samples') else 1
+        else:
+            self.benchmark_prompts = None
+            self.benchmark_samples = 0
 
     def send_object(self, obj, dst: int) -> None:
         """Send the input object list to the destination rank."""
@@ -440,8 +451,8 @@ class Trainer:
             with FSDP.summon_full_params(self.model.generator, writeback=True):
                 for n, p in self.model.generator.module.named_parameters():
                     p.data.copy_(backup[n].to(device=p.device, dtype=p.dtype))
-    
-    def run_validation(self, label="validation_videos"):
+
+    def run_validation(self, label="validation_videos", prompts=None, samples=1, upload=True, broadcast=False, filename_fn=None):
         with torch.no_grad():
             self.model.generator.eval()
             # prompts = [
@@ -450,47 +461,61 @@ class Trainer:
             #     "In the video, a lone musician stands gracefully in front of a grand cathedral, playing an accordion while surrounded by the lively water display of a central fountain. Dressed in a casual ensemble, he wears a light-colored shirt, dark pants, and a flat cap that gives him a vintage charm. His posture is relaxed, yet engaged, as he sways gently in rhythm with the music, casting soft shadows on the cobblestone steps beneath him. The backdrop features the cathedral's towering twin spires, with intricate stonework that casts a rich, historical aura around the scene. Sunlight bathes the entire setting, enhancing the golden hues of the cathedral facade and creating a halo-like effect around the musician. The fountain's water jets splash playfully, catching glimmers of light and adding a dynamic element to the tranquil atmosphere. The scene captures a harmonious blend of architectural majesty and human creativity, framed by the clear, azure sky that extends infinitely above. It's a vivid depiction of solitude and artistry, set against a timeless urban landscape.",
             #     "In the video, a fluffy dog with brown patches is intently engaged with a bright red toy shaped like a fire hydrant, which has a yellow and orange rope attached. The dog's body is relaxed as it lies on a plain white background, concentrating on nudging and playfully biting the toy. Its ears perk up slightly with curiosity, and its eyes are fixated on the toy, suggesting a scene of focused playfulness. The neutral tones of the dog's fur contrast starkly against the vivid red of the toy, creating a visually striking moment.",
             # ]
-            bsz_per_gpu = len(self.val_prompts) // self.world_size
-            local_prompts = self.val_prompts[self.global_rank * bsz_per_gpu: (self.global_rank + 1) * bsz_per_gpu]
-            validation = self.generate_video(
-                self.val_pipeline,
-                prompts=local_prompts,
-            )
-            if self.is_main_process:
-                all_prompts = local_prompts
-                all_videos = [validation]
+            
+            prompts = prompts if prompts is not None else self.val_prompts
+            bsz_per_gpu = len(prompts) // self.world_size
+            local_prompts = prompts[self.global_rank * bsz_per_gpu: (self.global_rank + 1) * bsz_per_gpu]
+            for sample_num in range(samples):
+                validation = self.generate_video(
+                    self.val_pipeline,
+                    prompts=local_prompts,
+                )
+                if self.is_main_process:
+                    all_prompts = local_prompts
+                    all_videos = [validation]
 
-                for rank in range(1, self.world_size):
-                    recv_prompts = self.recv_object(src=rank)
-                    recv_videos = self.recv_object(src=rank)
-                    all_prompts.extend(recv_prompts)
-                    all_videos.append(recv_videos)
+                    for rank in range(8, self.world_size, 8):
+                        recv_prompts = self.recv_object(src=rank)
+                        recv_videos = self.recv_object(src=rank)
+                        all_prompts.extend(recv_prompts)
+                        all_videos.append(recv_videos)
 
-                all_videos = np.concatenate(all_videos, axis=0)
+                    all_videos = np.concatenate(all_videos, axis=0)
+                    if broadcast:
+                        for dst in range(1, self.world_size):
+                            self.send_object(all_prompts, dst=dst)
+                            self.send_object(all_videos, dst=dst)
 
-                log_videos = []
-                for i, prompt in enumerate(all_prompts):
-                    filename = f"/workspace/temp_{self.step}_{i}.mp4"
-                    write_video(filename, all_videos[i], fps=16)
-                    log_videos.append(wandb.Video(filename, caption=prompt))
-                logs = { label : log_videos }
-                wandb.log(logs, step=self.step)
-            else:
-                self.send_object(local_prompts, dst=0)
-                self.send_object(validation, dst=0)
+                    log_videos = []
+                    for i, prompt in enumerate(all_prompts):
+                        filename = f"/workspace/temp_{self.step}_{i}_{sample_num}.mp4" if filename_fn is None else filename_fn(self.step, i, sample_num, prompt)
+                        write_video(filename, all_videos[i], fps=16)
+                        if upload:
+                            log_videos.append(wandb.Video(filename, caption=prompt))
+                    if upload:
+                        logs = { f"{label}_sample{sample_num}" if sample_num > 1 else label : log_videos }
+                        wandb.log(logs, step=self.step)
+                else:
+                    self.send_object(local_prompts, dst=0)
+                    self.send_object(validation, dst=0)
+                    if broadcast and self.local_rank == 0:
+                        all_prompts = self.recv_object(src=0)
+                        all_videos = self.recv_object(src=0)
+                        for i, prompt in enumerate(all_prompts):
+                            filename = f"/workspace/temp_{self.step}_{i}_{sample_num}.mp4" if filename_fn is None else filename_fn(self.step, i, sample_num, prompt)
+                            write_video(filename, all_videos[i], fps=16)
 
         self.model.generator.train()
         barrier()
 
     def train(self):
-        pct = os.environ.get("ATTN_TOPK_PCT", None)
         start_step = self.step
 
-        while self.step <= 0:
+        while self.step <= 700:
             if self.step % 100 == 0 and not (self.disable_wandb or self.val_prompts is None):
                 self.run_validation()
                 if self.generator_ema is not None:
-                    with self.use_generator_ema(f"validation_videos_topk_pct_{pct}"):
+                    with self.use_generator_ema():
                         self.run_validation("validation_videos_ema")
 
             TRAIN_GENERATOR = self.step % self.config.dfake_gen_update_ratio == 0
@@ -566,6 +591,15 @@ class Trainer:
                     if not self.disable_wandb:
                         wandb.log({"per iteration time": current_time - self.previous_time}, step=self.step)
                     self.previous_time = current_time
-        
+
+        if self.benchmark_prompts is not None:
+            os.makedirs("/workspace/vbench_videos_ema", exist_ok=True)
+            with self.use_generator_ema():
+                filename_fn = lambda step, i, sample_num, prompt: f"/workspace/vbench_videos_ema/{prompt}-{sample_num}.mp4"
+                self.run_validation("vbench_videos_ema", prompts=self.benchmark_prompts, samples=self.benchmark_samples, upload=False, broadcast=True, filename_fn=filename_fn)
+            os.makedirs("/workspace/vbench_videos", exist_ok=True)
+            filename_fn = lambda step, i, sample_num, prompt: f"/workspace/vbench_videos/{prompt}-{sample_num}.mp4"
+            self.run_validation("vbench_videos", prompts=self.benchmark_prompts, samples=self.benchmark_samples, upload=False, broadcast=True, filename_fn=filename_fn)
+
         torch.distributed.destroy_process_group(self.cpu_group)
         self.cpu_group = None
