@@ -659,6 +659,7 @@ class Trainer:
                 print(f"uploading data from rank {self.global_rank}")
                 os.system("ls -l /workspace/vbench_videos | wc -l")
                 os.system(f"aws s3 cp /workspace/vbench_videos s3://agi-mm-training-shared-us-east-2/beidchen/data/{self.run_name}_vbench_videos/ --region us-east-2 --recursive")
+            barrier()
 
         torch.distributed.destroy_process_group(self.cpu_group)
         self.cpu_group = None
