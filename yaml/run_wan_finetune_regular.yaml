@@ -36,7 +36,7 @@ spec:
                         values:
                           - p5en.48xlarge
           tolerations:
-            - key: rivee-long-context
+            - key: srivee-long-context
               operator: Equal
               value: "True"
               effect: NoSchedule

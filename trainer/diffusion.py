@@ -406,19 +406,23 @@ class Trainer:
             bsz_per_gpu = len(prompts) // self.world_size
             local_prompts = prompts[self.global_rank * bsz_per_gpu: (self.global_rank + 1) * bsz_per_gpu]
             for sample_num in range(samples):
-                validation = self.generate_video(
-                    self.val_pipeline,
-                    prompts=local_prompts,
-                )
+                validation = []
+                for prompt in local_prompts:
+                    validation.append(
+                        self.generate_video(
+                            self.val_pipeline,
+                            prompts=[prompt],
+                        )
+                    )
                 if self.is_main_process:
                     all_prompts = local_prompts
-                    all_videos = [validation]
+                    all_videos = validation
 
                     for rank in range(1, self.world_size):
                         recv_prompts = self.recv_object(src=rank)
                         recv_videos = self.recv_object(src=rank)
                         all_prompts.extend(recv_prompts)
-                        all_videos.append(recv_videos)
+                        all_videos.extend(recv_videos)
 
                     barrier()
 
@@ -465,8 +469,9 @@ class Trainer:
             self.train_one_step(batch)
             if (not self.config.no_save) and (self.step - start_step) > 0 and self.step % self.config.log_iters == 0:
                 torch.cuda.empty_cache()
-                # self.save()
-                torch.cuda.empty_cache()
+                if self.step == 1000:
+                    self.save()
+                    torch.cuda.empty_cache()
 
             barrier()
             if self.is_main_process:
