@@ -34,9 +34,9 @@ spec:
                       - key: node.kubernetes.io/instance-type
                         operator: In
                         values:
-                          - p5.48xlarge
+                          - p5en.48xlarge
           tolerations:
-            - key: mziyadi-lmsys-ce-p5
+            - key: guparpit-nb-swe-ac
               operator: Equal
               value: "True"
               effect: NoSchedule
@@ -115,7 +115,6 @@ spec:
                   python setup.py develop &&
                   mkdir -p /code-fsx/beidchen-sandbox/vbench_eval_results/finetune_wan_monarch_fast_tied3frame/{regular,ema} &&
                   mkdir -p /code-fsx/beidchen-sandbox/self_forcing_logs/finetune_wan_monarch_fast_tied3frame &&
-                  mkdir -p /code-fsx/beidchen-sandbox/self_forcing_logs/finetune_wan_monarch_fast_tied3frame &&
                   export MONARCH_ATTN_MIN_BLOCK_SIZE=5 &&
                   export MONARCH_ATTN_TARGET_SPARSITY=0.95 &&
                   export MONARCH_ATTN_NUM_ITERS=1 &&
@@ -183,13 +182,13 @@ spec:
           volumes:
             - name: fsx-claim-general--atl-2a1
               persistentVolumeClaim:
-                claimName: fsx-claim-general-a1
+                claimName: fsx-claim-general--atl-2a1
             - name: fsx-claim-general--atl-2a2
               persistentVolumeClaim:
-                claimName: fsx-claim-general-a4
+                claimName: fsx-claim-general--atl-2a2
             - name: fsx-claim-general--atl-2a3
               persistentVolumeClaim:
-                claimName: fsx-claim-general-a3
+                claimName: fsx-claim-general--atl-2a3
             - name: infiniband-efa-0
               hostPath:
                 path: /dev/infiniband/uverbs0
