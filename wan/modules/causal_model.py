@@ -949,7 +949,7 @@ class CausalWanSelfAttention(nn.Module):
             elif self.use_svg:
                 target_seq_len = 21 * 30 * 52 # curr_k.size(1)
                 if Wan_SparseAttn.curr_seq_len != target_seq_len:
-                    sample_mse_max_row = 10000
+                    sample_mse_max_row = 100000
                     Wan_SparseAttn.num_sampled_rows = 64
                     Wan_SparseAttn.sample_mse_max_row = sample_mse_max_row
                     num_frame_patches = target_seq_len // (30 * 52)
@@ -1011,18 +1011,18 @@ class CausalWanSelfAttention(nn.Module):
                     curr_v, (0, 0, 0, 0, 0, 21 * 30 * 52 - curr_v.size(1)), value=0.0
                 )
                 assert padded_q.shape == padded_k.shape
+                Wan_SparseAttn.sample_mse_min_row = curr_k.size(1) - roped_query.size(1)
+                Wan_SparseAttn.sample_mse_max_row = curr_k.size(1)
 
                 # padded_q = padded_q.transpose(1, 2).contiguous()
                 # curr_k = curr_k.transpose(1, 2).contiguous()
                 # curr_v = curr_v.transpose(1, 2).contiguous()
-                t = timestep.flatten()[0].item()
-                assert (timestep == t).all()
                 x = sparse_attention(
                     padded_q,
                     padded_k,
                     padded_v,
                     layer_idx=self.block_num,
-                    timestep=t,
+                    timestep=timestep,
                 )
                 # x = x[:, -roped_query.size(1):, :, :]
                 x = x[:, curr_k.size(1) - roped_query.size(1) : curr_k.size(1), :, :]
@@ -1039,10 +1039,8 @@ class CausalWanSelfAttention(nn.Module):
                 # x = rearrange(x, 'b s (h d) -> b s h d', d=d)
                 # x = x[:, -roped_query.size(1):, :, :]
                 # assert x.shape == roped_query.shape
-                t = timestep.flatten()[0].item()
-                assert (timestep == t).all()
 
-                if t == 1000 or self.block_num < 1:
+                if timestep == 1000 or self.block_num < 1:
                     x = attention(
                         roped_query,
                         curr_k,
@@ -1687,6 +1685,9 @@ class CausalWanModel(ModelMixin, ConfigMixin):
             def custom_forward(*inputs, **kwargs):
                 return module(*inputs, **kwargs)
             return custom_forward
+        
+        timestep = t.flatten()[0].item()
+        assert (t == timestep).all()
 
         for block_index, block in enumerate(self.blocks):
             if torch.is_grad_enabled() and self.gradient_checkpointing:
@@ -1697,7 +1698,7 @@ class CausalWanModel(ModelMixin, ConfigMixin):
                         "kv_cache": kv_cache[block_index],
                         "current_start": current_start,
                         "cache_start": cache_start,
-                        "timestep": t,
+                        "timestep": timestep,
                     }
                 )
                 x = torch.utils.checkpoint.checkpoint(
@@ -1714,7 +1715,7 @@ class CausalWanModel(ModelMixin, ConfigMixin):
                         "crossattn_cache": crossattn_cache[block_index],
                         "current_start": current_start,
                         "cache_start": cache_start,
-                        "timestep": t,
+                        "timestep": timestep,
                     }
                 )
                 x = block(x, **kwargs)

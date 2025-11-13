@@ -618,7 +618,7 @@ class Trainer:
             self.run_validation("vbench_videos", prompts=self.benchmark_prompts, samples=self.benchmark_samples, upload=False, filename_fn=filename_fn)
 
             if self.is_main_process:
-                os.system(f"aws s3 cp /workspace/vbench_videos s3://agi-mm-training-shared-us-east-2/beidchen/data/{self.run_name}_vbench_videos/ --recursive")
+                os.system(f"aws s3 cp /workspace/vbench_videos s3://agi-mm-training-shared-us-east-2/beidchen/data/{self.run_name}_vbench_videos/ --region us-east-2 --recursive")
 
         torch.distributed.destroy_process_group(self.cpu_group)
         self.cpu_group = None
