@@ -12,7 +12,7 @@
 # # kubectl apply -f yaml/run_monarch_fast_crossframe_reduced_lowsparse_init.yaml
 # # kubectl apply -f yaml/run_monarch_fast_crossframe_lowsparse_init.yaml
 # kubectl apply -f yaml/run_self_forcing.yaml
-# # kubectl apply -f yaml/run_self_forcing_test.yaml
+kubectl apply -f yaml/run_self_forcing_test.yaml
 # # kubectl apply -f yaml/run_wan_finetune_monarch_fast_0.85.yaml
 # # kubectl apply -f yaml/run_wan_finetune_monarch_fast_0.95.yaml
 # kubectl apply -f yaml/run_wan_finetune_regular.yaml
@@ -52,7 +52,7 @@
 # kubectl apply -f yaml/run_self_forcing_svg_nohack.yaml
 # kubectl apply -f yaml/run_self_forcing_svg.yaml
 # kubectl apply -f yaml/run_self_forcing_topk.yaml
-kubectl apply -f yaml2/run_self_forcing_ema.yaml
-kubectl apply -f yaml2/run_monarch_fast_framewise_dense_init3_ema.yaml
-kubectl apply -f yaml2/run_wan_finetune_regular_ema.yaml
-kubectl apply -f yaml2/run_wan_finetune_monarch_fast_tied_frame_ema.yaml
+# kubectl apply -f yaml2/run_self_forcing_ema.yaml
+# kubectl apply -f yaml2/run_monarch_fast_framewise_dense_init3_ema.yaml
+# kubectl apply -f yaml2/run_wan_finetune_regular_ema.yaml
+# kubectl apply -f yaml2/run_wan_finetune_monarch_fast_tied_frame_ema.yaml
