@@ -482,16 +482,14 @@ class Trainer:
                         )
                     )
                 if self.is_main_process:
-                    all_prompts = local_prompts
-                    all_videos = validation
+                    all_prompts = list(local_prompts)
+                    all_videos = list(validation)
 
                     for rank in range(1, self.world_size):
                         recv_prompts = self.recv_object(src=rank)
                         recv_videos = self.recv_object(src=rank)
                         all_prompts.extend(recv_prompts)
                         all_videos.extend(recv_videos)
-
-                    barrier()
 
                     all_videos = np.concatenate(all_videos, axis=0)
                     if broadcast:
@@ -511,7 +509,6 @@ class Trainer:
                 else:
                     self.send_object(local_prompts, dst=0)
                     self.send_object(validation, dst=0)
-                    barrier()
                     if broadcast and self.local_rank == 0:
                         all_prompts = self.recv_object(src=0)
                         all_videos = self.recv_object(src=0)
@@ -614,7 +611,7 @@ class Trainer:
                     filename_fn = lambda step, i, sample_num, prompt: f"/workspace/vbench_videos_ema/{prompt}-{sample_num}.mp4"
                     self.run_validation("vbench_videos_ema", prompts=self.benchmark_prompts, samples=self.benchmark_samples, upload=False, filename_fn=filename_fn)
                     if self.is_main_process:
-                        os.system(f"aws s3 cp /workspace/vbench_videos_ema s3://agi-mm-training-shared-us-east-2/beidchen/data/{self.run_name}_vbench_videos_ema/ --region us-east-2 --recursive")
+                        os.system(f"aws s3 cp /workspace/vbench_videos_ema s3://agi-mm-training-shared-us-east-2/beidchen/data/{self.run_name}_ema_vbench_videos/ --region us-east-2 --recursive")
             os.makedirs("/workspace/vbench_videos", exist_ok=True)
             filename_fn = lambda step, i, sample_num, prompt: f"/workspace/vbench_videos/{prompt}-{sample_num}.mp4"
             self.run_validation("vbench_videos", prompts=self.benchmark_prompts, samples=self.benchmark_samples, upload=False, filename_fn=filename_fn)

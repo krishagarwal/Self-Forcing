@@ -36,7 +36,7 @@ spec:
                         values:
                           - p5en.48xlarge
           tolerations:
-            - key: barijit-no-nvme-update-nnc7
+            - key: barijit-rl-173b-nnc7
               operator: Equal
               value: "True"
               effect: NoSchedule

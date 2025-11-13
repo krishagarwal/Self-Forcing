@@ -149,7 +149,10 @@ class Trainer:
             #     self.generator_ema.load_state_dict(
             #         state_dict["generator_ema"], strict=True
             #     )
-            if "generator" in state_dict:
+            init_ema = getattr(config, "init_ema", False)
+            if init_ema and "generator_ema" in state_dict:
+                state_dict = state_dict["generator_ema"]
+            elif "generator" in state_dict:
                 state_dict = state_dict["generator"]
             elif "model" in state_dict:
                 state_dict = state_dict["model"]
@@ -188,6 +191,8 @@ class Trainer:
         else:
             self.benchmark_prompts = None
             self.benchmark_samples = 0
+
+        self.inference_only = getattr(config, "inference_only", False)
 
     def send_object(self, obj, dst: int) -> None:
         """Send the input object list to the destination rank."""
@@ -415,16 +420,14 @@ class Trainer:
                         )
                     )
                 if self.is_main_process:
-                    all_prompts = local_prompts
-                    all_videos = validation
+                    all_prompts = list(local_prompts)
+                    all_videos = list(validation)
 
                     for rank in range(1, self.world_size):
                         recv_prompts = self.recv_object(src=rank)
                         recv_videos = self.recv_object(src=rank)
                         all_prompts.extend(recv_prompts)
                         all_videos.extend(recv_videos)
-
-                    barrier()
 
                     all_videos = np.concatenate(all_videos, axis=0)
                     if broadcast:
@@ -444,7 +447,6 @@ class Trainer:
                 else:
                     self.send_object(local_prompts, dst=0)
                     self.send_object(validation, dst=0)
-                    barrier()
                     if broadcast and self.local_rank == 0:
                         all_prompts = self.recv_object(src=0)
                         all_videos = self.recv_object(src=0)
@@ -458,7 +460,7 @@ class Trainer:
     def train(self):
         start_step = self.step
 
-        while self.step <= 1000:
+        while self.step <= 1000 and not self.inference_only:
             if self.step % 100 == 0 and not (self.disable_wandb or self.val_prompts is None):
                 self.run_validation()
                 if self.generator_ema is not None:
