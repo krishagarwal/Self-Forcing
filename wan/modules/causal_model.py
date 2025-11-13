@@ -1019,8 +1019,8 @@ class CausalWanSelfAttention(nn.Module):
                 assert (timestep == t).all()
                 x = sparse_attention(
                     padded_q,
-                    curr_k,
-                    curr_v,
+                    padded_k,
+                    padded_v,
                     layer_idx=self.block_num,
                     timestep=t,
                 )
