@@ -471,7 +471,7 @@ class Trainer:
             # ]
             
             prompts = prompts if prompts is not None else self.val_prompts
-            bsz_per_gpu = len(prompts) // self.world_size
+            bsz_per_gpu = max(1, (len(prompts) + self.world_size - 1) // self.world_size)
             local_prompts = prompts[self.global_rank * bsz_per_gpu: (self.global_rank + 1) * bsz_per_gpu]
             for sample_num in range(samples):
                 validation = []
@@ -482,6 +482,12 @@ class Trainer:
                             prompts=[prompt],
                         )
                     )
+                if len(local_prompts) < bsz_per_gpu:
+                    for _ in range(bsz_per_gpu - len(local_prompts)):
+                        self.generate_video(
+                            self.val_pipeline,
+                            prompts=["dummy_prompt"],
+                        )
                 if self.is_main_process:
                     all_prompts = list(local_prompts)
                     all_videos = list(validation)
