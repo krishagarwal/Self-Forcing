@@ -718,6 +718,7 @@ class CausalWanSelfAttention(nn.Module):
         self.disable_monarch = bool(int(os.getenv("DISABLE_MONARCH_ATTN", "0")))
         layer_disable_list = os.getenv("MONARCH_ATTN_DISABLE_LAYERS")
         self.topk = os.getenv("ATTN_TOPK_PCT")
+        self.use_hacks = bool(int(os.getenv("USE_HACKS", "0")))
         if self.topk is not None:
             self.topk = float(self.topk)
         if layer_disable_list is not None:
@@ -961,8 +962,8 @@ class CausalWanSelfAttention(nn.Module):
                         )
                         for mask_name in masks
                     ]
-                    Wan_SparseAttn.first_layers_fp = 0.025
-                    Wan_SparseAttn.first_times_fp = 0.075
+                    Wan_SparseAttn.first_layers_fp = 0.025 if self.use_hacks else 0
+                    Wan_SparseAttn.first_times_fp = 0.075 if self.use_hacks else 0
 
                     multiplier = diag_width = sparsity_to_width(
                         0.15, 0, num_frame_patches, frame_patches_one_frame
@@ -1040,7 +1041,7 @@ class CausalWanSelfAttention(nn.Module):
                 # x = x[:, -roped_query.size(1):, :, :]
                 # assert x.shape == roped_query.shape
 
-                if timestep == 1000 or self.block_num < 1:
+                if (timestep == 1000 or self.block_num < 1) and self.use_hacks:
                     x = attention(
                         roped_query,
                         curr_k,

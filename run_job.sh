@@ -15,7 +15,7 @@
 # # kubectl apply -f yaml/run_self_forcing_test.yaml
 # # kubectl apply -f yaml/run_wan_finetune_monarch_fast_0.85.yaml
 # # kubectl apply -f yaml/run_wan_finetune_monarch_fast_0.95.yaml
-kubectl apply -f yaml/run_wan_finetune_regular.yaml
+# kubectl apply -f yaml/run_wan_finetune_regular.yaml
 # kubectl apply -f yaml/run_wan_finetune_monarch_fast_tied_frame.yaml
 # kubectl apply -f yaml/run_wan_finetune_monarch_fast_tied_frame2.yaml
 # kubectl apply -f yaml/run_wan_finetune_monarch_fast_tied_frame3.yaml
@@ -49,3 +49,8 @@ kubectl apply -f yaml/run_wan_finetune_regular.yaml
 # kubectl apply -f yaml/run_monarch_oracle5.yaml
 # kubectl apply -f yaml/run_self_forcing_radial_attn.yaml
 # kubectl apply -f yaml/run_self_forcing_svg.yaml
+kubectl apply -f yaml/run_self_forcing_radial_attn_nohack.yaml
+kubectl apply -f yaml/run_self_forcing_radial_attn.yaml
+kubectl apply -f yaml/run_self_forcing_svg_nohack.yaml
+kubectl apply -f yaml/run_self_forcing_svg.yaml
+kubectl apply -f yaml/run_self_forcing_topk.yaml

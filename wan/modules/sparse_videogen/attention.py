@@ -41,7 +41,7 @@ __all__ = [
 ]
 
 
-# flex_attention = torch.compile(flex_attention, dynamic=False)
+flex_attention = torch.compile(flex_attention, dynamic=False)
 torch._dynamo.config.cache_size_limit = 192 * 3
 torch._dynamo.config.accumulated_cache_size_limit = 192 * 3
 
