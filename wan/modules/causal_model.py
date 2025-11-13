@@ -21,6 +21,7 @@ import os
 from .sparse_videogen.attention import sparse_attention, Wan_SparseAttn, prepare_flexattention, prepare_dense_attention
 from .sparse_videogen.utils import get_attention_mask, sparsity_to_width
 from .radial_attn.attn_mask import MaskMap, RadialAttention
+from .monarch_attn import monarch_video_attn
 
 # class MonarchAttnImplicitFn(torch.autograd.Function):
 #     @staticmethod
@@ -705,8 +706,8 @@ class CausalWanSelfAttention(nn.Module):
             self.target_sparsity = float(self.target_sparsity)
         self.use_initialize = bool(int(os.getenv("MONARCH_ATTN_USE_INITIALIZE", "0")))
         self.use_dense_init = bool(int(os.getenv("USE_DENSE_INIT", "0")))
-        self.h_reduce = int(os.getenv("MONARCH_ATTN_H_REDUCE", "2"))
-        self.w_reduce = int(os.getenv("MONARCH_ATTN_W_REDUCE", "2"))
+        self.h_reduce = int(os.getenv("MONARCH_ATTN_H_REDUCE", "1"))
+        self.w_reduce = int(os.getenv("MONARCH_ATTN_W_REDUCE", "1"))
         self.init_h_reduce = os.getenv("MONARCH_ATTN_INIT_H_REDUCE")
         if self.init_h_reduce is not None:
             self.init_h_reduce = int(self.init_h_reduce)
@@ -731,6 +732,9 @@ class CausalWanSelfAttention(nn.Module):
         if self.use_radial_attn:
             self.mask_map = None
         self.block_num = block_num
+
+        self.stats = [torch.zeros((self.num_heads), dtype=torch.float32, device='cuda') for top_p in [0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95]]
+        self.stats_iters = 0
 
         # layers
         self.q = nn.Linear(dim, dim)
@@ -942,6 +946,26 @@ class CausalWanSelfAttention(nn.Module):
                     attn = torch.softmax(qk, dim=-1)
                     x = torch.einsum('bhij,bjhd->bihd', attn, curr_v)
                 else:
+                    # t = timestep.flatten()[0].item()
+                    # assert (timestep == t).all(), "All timesteps in the batch must be the same when using dense attention with kv cache"
+                    # if t == 1000 and self.block_num == 0 and curr_k.size(1) == 3 * 1560:
+                    #     qk = torch.einsum('bihd,bjhd->bhij', roped_query, curr_k) * (d ** -0.5)
+                    #     attn = torch.softmax(qk.to(torch.float32), dim=-1)
+                    #     sorted_values, _ = torch.sort(attn, dim=-1, descending=True)
+                    #     sorted_cumsum = torch.cumsum(sorted_values, dim=-1)
+                    #     for i, top_p in enumerate([0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95]):
+                    #         topk_mask = sorted_cumsum >= top_p
+                    #         has_any = topk_mask.any(dim=-1)
+                    #         first_idx = topk_mask.float().argmax(dim=-1)
+                    #         count = torch.where(has_any, first_idx + 1, torch.tensor(attn.size(-1), device=attn.device))
+                    #         frac = (count / attn.size(-1)).float().mean(dim=(0, 2))
+                    #         self.stats[i] += frac
+                    #     self.stats_iters += 1
+                    #     if curr_k.size(1) == 6 * 1560:
+                    #         torch.save([x / self.stats_iters for x in self.stats], f"stats/stats_block{self.block_num}.pt")
+                    #     qk = torch.einsum('bid,bjd->bij', roped_query[:, :, 0], curr_k[:, :, 0]) * (d ** -0.5)
+                    #     attn = torch.softmax(qk.to(torch.float32)[0], dim=-1)
+                    #     breakpoint()
                     x = attention(
                         roped_query,
                         curr_k,
@@ -1067,45 +1091,55 @@ class CausalWanSelfAttention(nn.Module):
                     x = x[:, curr_k.size(1) - roped_query.size(1) : curr_k.size(1), :, :]
                     assert x.shape == roped_query.shape
             else:
-                block_b1, block_b2 = self.get_block_sizes(grid_sizes[0, 1].item(), grid_sizes[0, 2].item(), q.size(1), curr_k.size(1))
-                # block_b1 = grid_sizes[0, 1]
-                # block_b2 = grid_sizes[0, 2]
+                x = monarch_video_attn(
+                    roped_query,
+                    curr_k,
+                    curr_v,
+                    1 if self.use_framewise else 3,
+                    self.h_reduce,
+                    self.w_reduce,
+                    30,
+                    52,
+                )
+                # block_b1, block_b2 = self.get_block_sizes(grid_sizes[0, 1].item(), grid_sizes[0, 2].item(), q.size(1), curr_k.size(1))
+                # # block_b1 = grid_sizes[0, 1]
+                # # block_b2 = grid_sizes[0, 2]
 
-                b, s, h, d = roped_query.shape
-                h1, w1 = grid_sizes[0, 1].item(), grid_sizes[0, 2].item()
-                if self.target_sparsity is None or self.target_sparsity == 0.95 or self.target_sparsity == 0.9:
-                    def rearrange_fn(x):
-                        return x.view(b, -1, block_b1, block_b2, h, d)
-                    def return_fn(x):
-                        return x.reshape(b, s, h, d)
-                elif self.target_sparsity == 0.85:
-                    def rearrange_fn(x):
-                        x = x.view(b, -1, block_b1, w1 // block_b2, block_b2, h, d)
-                        return rearrange(x, 'b a i c j h d -> b (a c) i j h d')
-                    def return_fn(x):
-                        return rearrange(x, 'b (a c) i j h d -> b (a i c j) h d', c=(w1 // block_b2))
-                elif self.target_sparsity == 0.75:
-                    f_per_set, block_b1 = block_b1
-                    def rearrange_fn(x):
-                        x = x.view(b, -1, f_per_set, h1 // block_b1, block_b1, block_b2, h, d)
-                        return rearrange(x, 'b a f c i j h d -> b (a c) (f i) j h d')
-                    def return_fn(x):
-                        return rearrange(x, 'b (a c) (f i) j h d -> b (a f c i j) h d', c=h1 // block_b1, f=f_per_set)
-                else:
-                    f_per_set, block_b1 = block_b1
-                    def rearrange_fn(x):
-                        x = x.view(b, -1, f_per_set, h1 // block_b1, block_b1, w1 // block_b2, block_b2, h, d)
-                        return rearrange(x, 'b a f c i e j h d -> b (a c e) (f i) j h d')
-                    def return_fn(x):
-                        return rearrange(x, 'b (a c e) (f i) j h d -> b (a f c i e j) h d', c=h1 // block_b1, e=w1 // block_b2, f=f_per_set)
-                # curr_q = roped_query.view(b, -1, block_b1, block_b2, h, d)
-                # curr_k = curr_k.view(b, -1, block_b1, block_b2, h, d)
-                # curr_v = curr_v.view(b, -1, block_b1, block_b2, h, d)
-                # x = monarch_attn(curr_q, curr_k, curr_v, d ** -0.5, self.num_iters, self.eps).reshape(b, s, h, d)
-                curr_q = rearrange_fn(roped_query)
-                curr_k = rearrange_fn(curr_k)
-                curr_v = rearrange_fn(curr_v)
-                x = return_fn(monarch_attn(curr_q, curr_k, curr_v, d ** -0.5, self.num_iters, self.eps))
+                # b, s, h, d = roped_query.shape
+                # h1, w1 = grid_sizes[0, 1].item(), grid_sizes[0, 2].item()
+                # if self.target_sparsity is None or self.target_sparsity == 0.95 or self.target_sparsity == 0.9:
+                #     def rearrange_fn(x):
+                #         return x.view(b, -1, block_b1, block_b2, h, d)
+                #     def return_fn(x):
+                #         return x.reshape(b, s, h, d)
+                # elif self.target_sparsity == 0.85:
+                #     def rearrange_fn(x):
+                #         x = x.view(b, -1, block_b1, w1 // block_b2, block_b2, h, d)
+                #         return rearrange(x, 'b a i c j h d -> b (a c) i j h d')
+                #     def return_fn(x):
+                #         return rearrange(x, 'b (a c) i j h d -> b (a i c j) h d', c=(w1 // block_b2))
+                # elif self.target_sparsity == 0.75:
+                #     f_per_set, block_b1 = block_b1
+                #     def rearrange_fn(x):
+                #         x = x.view(b, -1, f_per_set, h1 // block_b1, block_b1, block_b2, h, d)
+                #         return rearrange(x, 'b a f c i j h d -> b (a c) (f i) j h d')
+                #     def return_fn(x):
+                #         return rearrange(x, 'b (a c) (f i) j h d -> b (a f c i j) h d', c=h1 // block_b1, f=f_per_set)
+                # else:
+                #     f_per_set, block_b1 = block_b1
+                #     def rearrange_fn(x):
+                #         x = x.view(b, -1, f_per_set, h1 // block_b1, block_b1, w1 // block_b2, block_b2, h, d)
+                #         return rearrange(x, 'b a f c i e j h d -> b (a c e) (f i) j h d')
+                #     def return_fn(x):
+                #         return rearrange(x, 'b (a c e) (f i) j h d -> b (a f c i e j) h d', c=h1 // block_b1, e=w1 // block_b2, f=f_per_set)
+                # # curr_q = roped_query.view(b, -1, block_b1, block_b2, h, d)
+                # # curr_k = curr_k.view(b, -1, block_b1, block_b2, h, d)
+                # # curr_v = curr_v.view(b, -1, block_b1, block_b2, h, d)
+                # # x = monarch_attn(curr_q, curr_k, curr_v, d ** -0.5, self.num_iters, self.eps).reshape(b, s, h, d)
+                # curr_q = rearrange_fn(roped_query)
+                # curr_k = rearrange_fn(curr_k)
+                # curr_v = rearrange_fn(curr_v)
+                # x = return_fn(monarch_attn(curr_q, curr_k, curr_v, d ** -0.5, self.num_iters, self.eps))
 
             kv_cache["global_end_index"].fill_(current_end)
             kv_cache["local_end_index"].fill_(local_end_index)
