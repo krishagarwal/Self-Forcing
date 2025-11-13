@@ -1039,23 +1039,34 @@ class CausalWanSelfAttention(nn.Module):
                 # x = rearrange(x, 'b s (h d) -> b s h d', d=d)
                 # x = x[:, -roped_query.size(1):, :, :]
                 # assert x.shape == roped_query.shape
-                self.mask_map = MaskMap(video_token_num=21 * 30 * 52, num_frame=21)
-                padded_q = torch.nn.functional.pad(
-                    roped_query, (0, 0, 0, 0, curr_k.size(1) - roped_query.size(1), 21 * 30 * 52 - curr_k.size(1)), value=0.0
-                )
-                padded_k = torch.nn.functional.pad(
-                    curr_k, (0, 0, 0, 0, 0, 21 * 30 * 52 - curr_k.size(1)), value=0.0
-                )
-                padded_v = torch.nn.functional.pad(
-                    curr_v, (0, 0, 0, 0, 0, 21 * 30 * 52 - curr_v.size(1)), value=0.0
-                )
-                assert padded_q.shape == padded_k.shape
-                x = RadialAttention(
-                    padded_q, padded_k, padded_v, self.mask_map, sparsity_type="radial", block_size=1, decay_factor=0.0, model_type="wan", pre_defined_mask=None, use_sage_attention=False
-                )
-                x = rearrange(x, 'b s (h d) -> b s h d', d=d)
-                x = x[:, curr_k.size(1) - roped_query.size(1) : curr_k.size(1), :, :]
-                assert x.shape == roped_query.shape
+                t = timestep.flatten()[0].item()
+                assert (timestep == t).all()
+
+                if t == 1000 or self.block_num < 1:
+                    x = attention(
+                        roped_query,
+                        curr_k,
+                        curr_v
+                    )
+                else:
+                    if self.mask_map is None:
+                        self.mask_map = MaskMap(video_token_num=21 * 30 * 52, num_frame=21)
+                    padded_q = torch.nn.functional.pad(
+                        roped_query, (0, 0, 0, 0, curr_k.size(1) - roped_query.size(1), 21 * 30 * 52 - curr_k.size(1)), value=0.0
+                    )
+                    padded_k = torch.nn.functional.pad(
+                        curr_k, (0, 0, 0, 0, 0, 21 * 30 * 52 - curr_k.size(1)), value=0.0
+                    )
+                    padded_v = torch.nn.functional.pad(
+                        curr_v, (0, 0, 0, 0, 0, 21 * 30 * 52 - curr_v.size(1)), value=0.0
+                    )
+                    assert padded_q.shape == padded_k.shape
+                    x = RadialAttention(
+                        padded_q, padded_k, padded_v, self.mask_map, sparsity_type="radial", block_size=1, decay_factor=0.0, model_type="wan", pre_defined_mask=None, use_sage_attention=False
+                    )
+                    x = rearrange(x, 'b s (h d) -> b s h d', d=d)
+                    x = x[:, curr_k.size(1) - roped_query.size(1) : curr_k.size(1), :, :]
+                    assert x.shape == roped_query.shape
             else:
                 block_b1, block_b2 = self.get_block_sizes(grid_sizes[0, 1].item(), grid_sizes[0, 2].item(), q.size(1), curr_k.size(1))
                 # block_b1 = grid_sizes[0, 1]
