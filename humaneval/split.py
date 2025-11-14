@@ -139,7 +139,7 @@ def organize_evaluation_pairs(full_folder: str, sparse_folder: str, output_base:
             # Add prompt file
             # Remove the first 4 characters (e.g., "001_") from video name
             # video_name_without_prefix = video_name[4:] + '.mp4'
-            video_name_without_prefix = video_name + '.mp4'
+            video_name_without_prefix = video_name
             prompt = prompts.get(video_name_without_prefix, "")
             if not prompt:
                 print(f"Warning: No prompt found for video {video_name}")
