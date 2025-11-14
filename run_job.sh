@@ -61,7 +61,7 @@
 
 # kubectl apply -f yaml/run_monarch_oracle4.yaml <= DONE
 # kubectl apply -f yaml/run_monarch_oracle5.yaml <= DONE
-kubectl apply -f yaml2/run_monarch_fast_framewise_dense_init2_ema.yaml
+# kubectl apply -f yaml2/run_monarch_fast_framewise_dense_init2_ema.yaml
 # kubectl apply -f yaml2/run_monarch_fast_framewise_dense_init3_ema.yaml <= DONE
 
 
