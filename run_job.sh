@@ -43,15 +43,15 @@
 # kubectl apply -f yaml/run_monarch_fast_framewise_dense_init2.yaml
 
 # running on guparpit-nb-swe-ac (p5en)
-# kubectl apply -f yaml2/run_monarch_fast_framewise_dense_init_ema.yaml
-# kubectl apply -f yaml2/run_self_forcing_ema.yaml
-# kubectl apply -f yaml/run_monarch_oracle0.yaml
+# kubectl apply -f yaml2/run_monarch_fast_framewise_dense_init_ema.yaml <= DONE
+# kubectl apply -f yaml2/run_self_forcing_ema.yaml <= DONE
+# kubectl apply -f yaml/run_monarch_oracle0.yaml <= DONE
 
 # running on 2x ikiss-swe-skills-p5 2x shobhvas-runtime (p5)
 # kubectl apply -f yaml/run_self_forcing_radial_attn.yaml
-# kubectl apply -f yaml/run_self_forcing_svg.yaml
+# kubectl apply -f yaml/run_self_forcing_svg.yaml <= DONE
 # kubectl apply -f yaml/run_self_forcing_radial_attn_nohack.yaml
-# kubectl apply -f yaml/run_self_forcing_svg_nohack.yaml
+# kubectl apply -f yaml/run_self_forcing_svg_nohack.yaml <= DONE
 
 # running on p5
 # kubectl apply -f yaml/run_self_forcing_topk.yaml
@@ -59,10 +59,10 @@
 # kubectl apply -f yaml/run_monarch_oracle2.yaml
 # kubectl apply -f yaml/run_monarch_oracle3.yaml
 
-# kubectl apply -f yaml/run_monarch_oracle4.yaml
-# kubectl apply -f yaml/run_monarch_oracle5.yaml
-# kubectl apply -f yaml2/run_monarch_fast_framewise_dense_init2_ema.yaml
-# kubectl apply -f yaml2/run_monarch_fast_framewise_dense_init3_ema.yaml
+# kubectl apply -f yaml/run_monarch_oracle4.yaml <= DONE
+# kubectl apply -f yaml/run_monarch_oracle5.yaml <= DONE
+kubectl apply -f yaml2/run_monarch_fast_framewise_dense_init2_ema.yaml
+kubectl apply -f yaml2/run_monarch_fast_framewise_dense_init3_ema.yaml
 
 
 # kubectl apply -f yaml2/run_wan_finetune_regular_ema.yaml
@@ -72,7 +72,7 @@
 
 
 # evaluations
-kubectl apply -f yaml3/run_monarch_fast_framewise_dense_init_ema.yaml
+# kubectl apply -f yaml3/run_monarch_fast_framewise_dense_init_ema.yaml
 # kubectl apply -f yaml3/run_self_forcing_ema.yaml
 # kubectl apply -f yaml3/run_self_forcing_svg_nohack.yaml
 # kubectl apply -f yaml3/run_self_forcing_svg.yaml
