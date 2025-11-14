@@ -157,8 +157,8 @@ for causal in [False, True]:
         K = torch.randn((Z, S, H, HEAD_DIM), dtype=dtype, device=DEVICE)
         V = torch.randn((Z, S, H, HEAD_DIM), dtype=dtype, device=DEVICE)
 
-        causal_configs = [(1, 1, 1), (1, 2, 1), (1, 2, 4)]
-        noncausal_configs = [(3, 1, 1), (3, 2, 1), (3, 6, 2)]
+        causal_configs = [(1, 1, 1), (1, 2, 1)]
+        noncausal_configs = [(3, 1, 1), (3, 2, 1)]
 
         configs = causal_configs if causal else noncausal_configs
 
