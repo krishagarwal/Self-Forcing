@@ -116,8 +116,9 @@ spec:
                   python -m pip install -e detectron2 --no-build-isolation &&
                   pip install setuptools==69.5.1 &&
                   cd VBench &&
-                  mkdir -p VBENCH_CACHE_DIR=/workspace/.cache &&
+                  mkdir -p /workspace/.cache &&
                   export VBENCH_CACHE_DIR=/workspace/.cache &&
+                  export TORCH_HOME=/workspace/
                   torchrun --nproc_per_node=8 --rdzv-conf="timeout=7200,read_timeout=7200,join_timeout=7200" evaluate.py --output_path /code-fsx/beidchen-sandbox/vbench_eval_results/self_forcing_dmd_monarch_framewise_fast_denseinit/ema --videos_path /workspace/vbench_videos --dimension subject_consistency background_consistency temporal_flickering motion_smoothness dynamic_degree aesthetic_quality imaging_quality object_class multiple_objects human_action color spatial_relationship scene temporal_style appearance_style overall_consistency --mode vbench_standard | tee /code-fsx/beidchen-sandbox/self_forcing_dmd_monarch_framewise_fast_denseinit_ema_vbench.log
               image: 767397878797.dkr.ecr.us-east-1.amazonaws.com/agif-mm-pt-base:reasoning-vllm.sglang.megatron.deepseek.video.fa3
               imagePullPolicy: Always
