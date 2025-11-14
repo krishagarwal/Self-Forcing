@@ -61,15 +61,14 @@
 
 # kubectl apply -f yaml/run_monarch_oracle4.yaml <= DONE
 # kubectl apply -f yaml/run_monarch_oracle5.yaml <= DONE
-kubectl apply -f yaml2/run_monarch_fast_framewise_dense_init2_ema.yaml
+# kubectl apply -f yaml2/run_monarch_fast_framewise_dense_init2_ema.yaml
 # kubectl apply -f yaml2/run_monarch_fast_framewise_dense_init3_ema.yaml <= DONE
 
 
-# kubectl apply -f yaml2/run_wan_finetune_regular_ema.yaml
-# kubectl apply -f yaml2/run_wan_finetune_monarch_fast_tied_frame_ema.yaml
-# kubectl apply -f yaml2/run_wan_finetune_monarch_fast_tied_frame2_ema.yaml
-# kubectl apply -f yaml2/run_wan_finetune_monarch_fast_tied_frame3_ema.yaml
-
+kubectl apply -f yaml2/run_wan_finetune_regular_ema.yaml
+kubectl apply -f yaml2/run_wan_finetune_monarch_fast_tied_frame_ema.yaml
+kubectl apply -f yaml2/run_wan_finetune_monarch_fast_tied_frame2_ema.yaml
+kubectl apply -f yaml2/run_wan_finetune_monarch_fast_tied_frame3_ema.yaml
 
 # evaluations
 # kubectl apply -f yaml3/run_monarch_fast_framewise_dense_init_ema.yaml
