@@ -36,7 +36,7 @@ spec:
                         values:
                           - p5en.48xlarge
           tolerations:
-            - key: barijit-rl-173b-nnc7
+            - key: run_wan_finetune_regular_ema
               operator: Equal
               value: "True"
               effect: NoSchedule
