@@ -92,19 +92,22 @@ class Trainer:
             weight_decay=config.weight_decay
         )
 
-        # Step 3: Initialize the dataloader
-        dataset = ShardingLMDBDataset(config.data_path, max_pair=int(1e8))
-        sampler = torch.utils.data.distributed.DistributedSampler(
-            dataset, shuffle=True, drop_last=True)
-        dataloader = torch.utils.data.DataLoader(
-            dataset,
-            batch_size=config.batch_size,
-            sampler=sampler,
-            num_workers=8)
+        self.inference_only = getattr(config, "inference_only", False)
 
-        if dist.get_rank() == 0:
-            print("DATASET SIZE %d" % len(dataset))
-        self.dataloader = cycle(dataloader)
+        if not self.inference_only:
+            # Step 3: Initialize the dataloader
+            dataset = ShardingLMDBDataset(config.data_path, max_pair=int(1e8))
+            sampler = torch.utils.data.distributed.DistributedSampler(
+                dataset, shuffle=True, drop_last=True)
+            dataloader = torch.utils.data.DataLoader(
+                dataset,
+                batch_size=config.batch_size,
+                sampler=sampler,
+                num_workers=8)
+
+            if dist.get_rank() == 0:
+                print("DATASET SIZE %d" % len(dataset))
+            self.dataloader = cycle(dataloader)
 
         ##############################################################################################################
         # 6. Set up EMA parameter containers
@@ -193,8 +196,6 @@ class Trainer:
         else:
             self.benchmark_prompts = None
             self.benchmark_samples = 0
-
-        self.inference_only = getattr(config, "inference_only", False)
 
     def send_object(self, obj, dst: int) -> None:
         """Send the input object list to the destination rank."""
