@@ -61,6 +61,9 @@ def organize_evaluation_pairs(full_folder: str, sparse_folder: str, output_base:
     full_videos = {f.stem: f for f in Path(full_folder).glob("*-0.mp4")}
     sparse_videos = {f.stem: f for f in Path(sparse_folder).glob("*-0.mp4")}
 
+    print(sorted(list(prompts.keys()))[0])
+    print(sorted(list(prompts.keys()))[0])
+
     full_videos = {k : v for k, v in full_videos.items() if any(f"{x}-0.mp4" == k for x in prompts.keys())}
     sparse_videos = {k : v for k, v in sparse_videos.items() if any(f"{x}-0.mp4" == k for x in prompts.keys())}
 
