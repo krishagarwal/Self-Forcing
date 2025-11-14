@@ -527,12 +527,15 @@ class Trainer:
         barrier()
 
     def run_final_validation(self, prompts=None, samples=1, filename_fn=None):
+        with open("prompts/vbench/all_dimension.txt", "r") as f:
+            names = [line.strip() for line in f.readlines()]
         with torch.no_grad():
             self.model.generator.eval()
             prompts = prompts if prompts is not None else self.val_prompts
             bsz_per_gpu = max(1, (len(prompts) + self.world_size - 1) // self.world_size)
             print(f"rank {self.global_rank} processing {self.global_rank * bsz_per_gpu} to {(self.global_rank + 1) * bsz_per_gpu}")
             local_prompts = prompts[self.global_rank * bsz_per_gpu: (self.global_rank + 1) * bsz_per_gpu]
+            local_names = names[self.global_rank * bsz_per_gpu: (self.global_rank + 1) * bsz_per_gpu]
             for sample_num in range(samples):
                 validation = []
                 for prompt in local_prompts:
@@ -549,11 +552,12 @@ class Trainer:
                             prompts=["dummy_prompt"],
                         )
                 all_prompts = list(local_prompts)
+                all_names = list(local_names)
                 all_videos = list(validation)
                 if len(all_prompts) > 0:
                     all_videos = np.concatenate(all_videos, axis=0)
-                    for i, prompt in enumerate(all_prompts):
-                        filename = f"/workspace/temp_{self.step}_{i}_{sample_num}.mp4" if filename_fn is None else filename_fn(self.step, i, sample_num, prompt)
+                    for i, (prompt, name) in enumerate(zip(all_prompts, all_names)):
+                        filename = f"/workspace/temp_{self.step}_{i}_{sample_num}.mp4" if filename_fn is None else filename_fn(self.step, i, sample_num, name)
                         write_video(filename, all_videos[i], fps=16)
         self.model.generator.train()
         barrier()
