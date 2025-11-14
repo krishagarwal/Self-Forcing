@@ -36,7 +36,7 @@ def load_prompts(prompt_dir: str) -> dict:
             prompt = line.strip()
             if prompt:  # Skip empty lines
                 # Video name is generated from first 200 chars of prompt
-                video_name = prompt + '.mp4'
+                video_name = prompt + '-0.mp4'
                 prompts[video_name] = prompt
     
     print(f"Loaded {len(prompts)} prompts from {prompt_dir}")
@@ -58,8 +58,8 @@ def organize_evaluation_pairs(full_folder: str, sparse_folder: str, output_base:
     print(f"Loaded {len(prompts)} prompts from {prompt_file}")
     
     # Get all video files
-    full_videos = {f.stem: f for f in Path(full_folder).glob("*.mp4")}
-    sparse_videos = {f.stem: f for f in Path(sparse_folder).glob("*.mp4")}
+    full_videos = {f.stem: f for f in Path(full_folder).glob("*-0.mp4")}
+    sparse_videos = {f.stem: f for f in Path(sparse_folder).glob("*-0.mp4")}
     
     # Find matching video names
     matching_names = sorted(list(set(full_videos.keys()) & set(sparse_videos.keys())))
