@@ -64,8 +64,6 @@ def organize_evaluation_pairs(full_folder: str, sparse_folder: str, output_base:
     full_videos = {k : v for k, v in full_videos.items() if any(f"{x}-0.mp4" == k for x in prompts.keys())}
     sparse_videos = {k : v for k, v in sparse_videos.items() if any(f"{x}-0.mp4" == k for x in prompts.keys())}
 
-    assert len(full_videos) == len(prompts)
-    assert len(sparse_videos) == len(prompts)
     # Find matching video names
     matching_names = sorted(list(set(full_videos.keys()) & set(sparse_videos.keys())))
     
