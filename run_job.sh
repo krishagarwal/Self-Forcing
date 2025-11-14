@@ -42,13 +42,13 @@ kubectl apply -f yaml/run_self_forcing_test.yaml
 # kubectl apply -f yaml/run_monarch_fast_framewise_dense_init.yaml
 # kubectl apply -f yaml/run_monarch_fast_framewise_dense_init2.yaml
 
+kubectl apply -f yaml2/run_monarch_fast_framewise_dense_init_ema.yaml
+kubectl apply -f yaml2/run_self_forcing_ema.yaml
+kubectl apply -f yaml/run_monarch_oracle0.yaml
 
-# kubectl apply -f yaml/run_monarch_oracle0.yaml
 # kubectl apply -f yaml/run_self_forcing_radial_attn.yaml
 # kubectl apply -f yaml/run_self_forcing_svg.yaml
 # kubectl apply -f yaml/run_self_forcing_topk.yaml
-# kubectl apply -f yaml2/run_self_forcing_ema.yaml
-# kubectl apply -f yaml2/run_monarch_fast_framewise_dense_init_ema.yaml
 # kubectl apply -f yaml2/run_monarch_fast_framewise_dense_init2_ema.yaml
 # kubectl apply -f yaml2/run_monarch_fast_framewise_dense_init3_ema.yaml
 
