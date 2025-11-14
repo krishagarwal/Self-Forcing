@@ -161,6 +161,7 @@ class Trainer:
                 state_dict = state_dict["generator"]
             elif "model" in state_dict:
                 state_dict = state_dict["model"]
+            state_dict = {rename_param(k): v for k, v in state_dict.items()}
             self.model.generator.load_state_dict(
                 state_dict, strict=True
             )
