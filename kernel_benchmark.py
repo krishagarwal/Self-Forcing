@@ -147,7 +147,7 @@ dtype = torch.bfloat16
 for causal in [False, True]:
     print(f"=== CAUSAL: {causal} ===")
 
-    for F in range(3, 22, 3):
+    for F in range(21, 22, 3):
         print(f" --- F = {F} --- ")
         Z, block_b1, block_b2, H, HEAD_DIM = 1, 30, 52, 12, 128
         S = F * block_b1 * block_b2
@@ -158,7 +158,7 @@ for causal in [False, True]:
         V = torch.randn((Z, S, H, HEAD_DIM), dtype=dtype, device=DEVICE)
 
         causal_configs = [(1, 1, 1), (1, 2, 1), (1, 2, 4)]
-        noncausal_configs = [(3, 1, 1), (1, 2, 1), (1, 6, 2)]
+        noncausal_configs = [(3, 1, 1), (3, 2, 1), (3, 6, 2)]
 
         configs = causal_configs if causal else noncausal_configs
 
