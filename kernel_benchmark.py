@@ -147,7 +147,7 @@ dtype = torch.bfloat16
 for causal in [False, True]:
     print(f"=== CAUSAL: {causal} ===")
 
-    for F in range(1, 22):
+    for F in range(3, 22, 3):
         print(f" --- F = {F} --- ")
         Z, block_b1, block_b2, H, HEAD_DIM = 1, 30, 52, 12, 128
         S = F * block_b1 * block_b2
