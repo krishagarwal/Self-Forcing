@@ -72,7 +72,7 @@
 
 
 # evaluations
-# kubectl apply -f yaml3/run_monarch_fast_framewise_dense_init_ema.yaml
+kubectl apply -f yaml3/run_monarch_fast_framewise_dense_init_ema.yaml
 kubectl apply -f yaml3/run_self_forcing_ema.yaml
 kubectl apply -f yaml3/run_self_forcing_svg_nohack.yaml
 kubectl apply -f yaml3/run_self_forcing_svg.yaml
