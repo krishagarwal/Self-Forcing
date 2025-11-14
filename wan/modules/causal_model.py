@@ -8,9 +8,9 @@ from wan.modules.model import (
     MLPProj,
     sinusoidal_embedding_1d
 )
-from torch.nn.attention.flex_attention import create_block_mask, flex_attention
+# from torch.nn.attention.flex_attention import create_block_mask, flex_attention
 from diffusers.configuration_utils import ConfigMixin, register_to_config
-from torch.nn.attention.flex_attention import BlockMask
+# from torch.nn.attention.flex_attention import BlockMask
 from diffusers.models.modeling_utils import ModelMixin
 import torch.nn as nn
 import torch
@@ -644,8 +644,8 @@ monarch_attn = MonarchAttnImplicitFn.apply
 # wan 1.3B model has a weird channel / head configurations and require max-autotune to work with flexattention
 # see https://github.com/pytorch/pytorch/issues/133254
 # change to default for other models
-flex_attention = torch.compile(
-    flex_attention, dynamic=False, mode="max-autotune-no-cudagraphs")
+# flex_attention = torch.compile(
+#     flex_attention, dynamic=False, mode="max-autotune-no-cudagraphs")
 
 
 def causal_rope_apply(x, grid_sizes, freqs, start_frame=0):
