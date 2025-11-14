@@ -36,7 +36,7 @@ def load_prompts(prompt_dir: str) -> dict:
             prompt = line.strip()
             if prompt:  # Skip empty lines
                 # Video name is generated from first 200 chars of prompt
-                video_name = prompt[:200] + '.mp4'
+                video_name = prompt + '.mp4'
                 prompts[video_name] = prompt
     
     print(f"Loaded {len(prompts)} prompts from {prompt_dir}")
