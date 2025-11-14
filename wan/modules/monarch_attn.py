@@ -687,7 +687,7 @@ def keep(conf):
     return not (torch.cuda.get_device_capability()[0] == 9 and BLOCK_J * BLOCK_L < 128 * 128
                 and conf.num_warps == 8)
 
-# configs = [triton.Config({'BLOCK_J': 64, 'BLOCK_L': 64}, num_stages=2, num_warps=4, pre_hook=_al_cl_y_fwd_pre_hook)]
+# configs = [triton.Config({'BLOCK_J': 16, 'BLOCK_L': 32}, num_stages=3, num_warps=8, pre_hook=_al_cl_y_fwd_pre_hook)]
 
 @triton.autotune(configs=list(filter(keep, configs)), key=["block_b1", "block_b2", "HEAD_DIM", "IS_FIRST_ITER"], cache_results=True)
 @triton.jit
@@ -931,7 +931,7 @@ def keep(conf):
     return not (torch.cuda.get_device_capability()[0] == 9 and BLOCK_I * BLOCK_K < 128 * 128
                 and conf.num_warps == 8)
 
-# configs = [triton.Config({'BLOCK_I': 64, 'BLOCK_K': 32}, num_stages=2, num_warps=4, pre_hook=_z_fwd_pre_hook)]
+# configs = [triton.Config({'BLOCK_I': 128, 'BLOCK_K': 32}, num_stages=2, num_warps=8, pre_hook=_z_fwd_pre_hook)]
 @triton.autotune(configs=list(filter(keep, configs)), key=["block_b1", "block_b2", "HEAD_DIM", "OUTPUT_LSE"], cache_results=True)
 @triton.jit
 def _z_fwd(Z, H, A, F,

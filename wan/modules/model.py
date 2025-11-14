@@ -500,9 +500,9 @@ class WanSelfAttention(nn.Module):
         self.qk_norm = qk_norm
         self.eps = eps
 
-        self.tied_f = os.getenv("MONARCH_ATTN_TIED_F", "1")
-        self.h_reduce = os.getenv("MONARCH_ATTN_H_REDUCE", "1")
-        self.w_reduce = os.getenv("MONARCH_ATTN_W_REDUCE", "1")
+        self.tied_f = int(os.getenv("MONARCH_ATTN_TIED_F", "1"))
+        self.h_reduce = int(os.getenv("MONARCH_ATTN_H_REDUCE", "1"))
+        self.w_reduce = int(os.getenv("MONARCH_ATTN_W_REDUCE", "1"))
 
         # self.min_block_size = int(os.getenv("MONARCH_ATTN_MIN_BLOCK_SIZE", "1"))
         # self.target_sparsity = os.getenv("MONARCH_ATTN_TARGET_SPARSITY")

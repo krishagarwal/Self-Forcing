@@ -58,6 +58,9 @@ class BidirectionalDiffusionInferencePipeline(torch.nn.Module):
         latents = noise
 
         sample_scheduler = self._initialize_sample_scheduler(noise)
+        diffusion_start = torch.cuda.Event(enable_timing=True)
+        diffusion_end = torch.cuda.Event(enable_timing=True)
+        diffusion_start.record()
         for _, t in enumerate(tqdm(sample_scheduler.timesteps)):
             latent_model_input = latents
             # timestep = t * torch.ones([latents.shape[0], 21], device=noise.device, dtype=torch.float32)
@@ -75,6 +78,10 @@ class BidirectionalDiffusionInferencePipeline(torch.nn.Module):
                 latents.unsqueeze(0),
                 return_dict=False)[0]
             latents = temp_x0.squeeze(0)
+        
+        diffusion_end.record()
+        diffusion_time = diffusion_start.elapsed_time(diffusion_end)
+        print("diffusion time: {:.6f} ms".format(diffusion_time))
 
         x0 = latents
         video = self.vae.decode_to_pixel(x0)

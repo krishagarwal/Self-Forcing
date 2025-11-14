@@ -263,12 +263,12 @@ class CausalInferencePipeline(torch.nn.Module):
             total_time = init_time + diffusion_time + vae_time
 
             print("Profiling results:")
-            print(f"  - Initialization/caching time: {init_time:.2f} ms ({100 * init_time / total_time:.2f}%)")
-            print(f"  - Diffusion generation time: {diffusion_time:.2f} ms ({100 * diffusion_time / total_time:.2f}%)")
+            print(f"  - Initialization/caching time: {init_time:.6f} ms ({100 * init_time / total_time:.6f}%)")
+            print(f"  - Diffusion generation time: {diffusion_time:.6f} ms ({100 * diffusion_time / total_time:.6f}%)")
             for i, block_time in enumerate(block_times):
-                print(f"    - Block {i} generation time: {block_time:.2f} ms ({100 * block_time / diffusion_time:.2f}% of diffusion)")
-            print(f"  - VAE decoding time: {vae_time:.2f} ms ({100 * vae_time / total_time:.2f}%)")
-            print(f"  - Total time: {total_time:.2f} ms")
+                print(f"    - Block {i} generation time: {block_time:.6f} ms ({100 * block_time / diffusion_time:.6f}% of diffusion)")
+            print(f"  - VAE decoding time: {vae_time:.6f} ms ({100 * vae_time / total_time:.6f}%)")
+            print(f"  - Total time: {total_time:.6f} ms")
 
         if return_latents:
             return video, output
