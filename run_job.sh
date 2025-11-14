@@ -50,13 +50,13 @@
 # running on 2x ikiss-swe-skills-p5 2x shobhvas-runtime (p5)
 # kubectl apply -f yaml/run_self_forcing_radial_attn.yaml <= DONE
 # kubectl apply -f yaml/run_self_forcing_svg.yaml <= DONE
-# kubectl apply -f yaml/run_self_forcing_radial_attn_nohack.yaml <= RUNNING
+# kubectl apply -f yaml/run_self_forcing_radial_attn_nohack.yaml <= DONE
 # kubectl apply -f yaml/run_self_forcing_svg_nohack.yaml <= DONE
 
 # running on p5
-kubectl apply -f yaml/run_self_forcing_topk.yaml
+# kubectl apply -f yaml/run_self_forcing_topk.yaml
 # kubectl apply -f yaml/run_monarch_oracle1.yaml <= DONE
-# kubectl apply -f yaml/run_monarch_oracle2.yaml <= RUNNING
+# kubectl apply -f yaml/run_monarch_oracle2.yaml <= DONE
 # kubectl apply -f yaml/run_monarch_oracle3.yaml <= DONE
 
 # kubectl apply -f yaml/run_monarch_oracle4.yaml <= DONE
