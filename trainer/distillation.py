@@ -537,7 +537,9 @@ class Trainer:
         with torch.no_grad():
             self.model.generator.eval()
             bsz_per_gpu = len(prompts) // self.world_size
-            print(f"rank {self.global_rank} processing {self.global_rank * bsz_per_gpu} to {(self.global_rank + 1) * bsz_per_gpu}{" + one extra prompt" if self.global_rank < len(prompts) % self.world_size else ""}")
+            print(f"rank {self.global_rank} processing {self.global_rank * bsz_per_gpu} to {(self.global_rank + 1) * bsz_per_gpu}")
+            if self.global_rank < len(prompts) % self.world_size:
+                print(f"rank {self.global_rank} processing extra prompt")
             local_prompts = prompts[self.global_rank * bsz_per_gpu: (self.global_rank + 1) * bsz_per_gpu]
             local_names = names[self.global_rank * bsz_per_gpu: (self.global_rank + 1) * bsz_per_gpu]
             if self.global_rank < len(prompts) % self.world_size:
