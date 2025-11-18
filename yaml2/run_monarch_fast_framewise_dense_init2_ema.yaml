@@ -112,8 +112,8 @@ spec:
                   pip install -r requirements.txt &&
                   pip install flashinfer-python &&
                   python setup.py develop &&
-                  mkdir -p /code-fsx/beidchen-sandbox/vbench_eval_results/self_forcing_dmd_monarch_framewise_fast_denseinit_reduce2xh/{regular,ema} &&
-                  mkdir -p /code-fsx/beidchen-sandbox/self_forcing_logs/self_forcing_dmd_monarch_framewise_fast_denseinit_reduce2xh &&
+                  mkdir -p /code-fsx/beidchen-sandbox/vbench_eval_results/dmd_monarch_framewise_fast_denseinit_reduce2xh_ema_moviebench &&
+                  mkdir -p /code-fsx/beidchen-sandbox/self_forcing_logs/dmd_monarch_framewise_fast_denseinit_reduce2xh_ema_moviebench &&
                   export MONARCH_ATTN_TARGET_SPARSITY=0.65 &&
                   export MONARCH_ATTN_NUM_ITERS=1 &&
                   export MONARCH_ATTN_W_REDUCE=1 &&
@@ -121,7 +121,7 @@ spec:
                   export USE_DENSE_INIT=1 &&
                   export MONARCH_ATTN_FRAMEWISE=1 &&
                   export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True &&
-                  torchrun --nproc_per_node=8 --rdzv-conf="timeout=7200,read_timeout=7200,join_timeout=7200" train.py --wandb-save-dir /workspace/wandb --config_path configs/self_forcing_inference_only_dmd_monarch_framewise_fast_denseinit_reduce2xh_ema.yaml --logdir /code-fsx/beidchen-sandbox/self_forcing_logs/self_forcing_dmd_monarch_framewise_fast_denseinit_reduce2xh --wandb_name dmd_monarch_framewise_fast_denseinit_reduce2xh_ema | tee /code-fsx/beidchen-sandbox/self_forcing_dmd_monarch_framewise_fast_denseinit_reduce2xh_ema.log
+                  torchrun --nproc_per_node=8 --rdzv-conf="timeout=7200,read_timeout=7200,join_timeout=7200" train.py --wandb-save-dir /workspace/wandb --config_path configs/self_forcing_inference_only_dmd_monarch_framewise_fast_denseinit_reduce2xh_ema.yaml --logdir /code-fsx/beidchen-sandbox/self_forcing_logs/dmd_monarch_framewise_fast_denseinit_reduce2xh_ema_moviebench --wandb_name dmd_monarch_framewise_fast_denseinit_reduce2xh_ema_moviebench | tee /code-fsx/beidchen-sandbox/dmd_monarch_framewise_fast_denseinit_reduce2xh_ema_moviebench.log
               image: 767397878797.dkr.ecr.us-east-1.amazonaws.com/agif-mm-pt-base:reasoning-vllm.sglang.megatron.deepseek.video.fa3
               imagePullPolicy: Always
               securityContext:

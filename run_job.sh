@@ -90,7 +90,10 @@
 # kubectl apply -f yaml/run_monarch_oracle1_exact.yaml
 # kubectl apply -f yaml/run_monarch_oracle2_exact.yaml
 
-kubectl apply -f yaml2/run_wan_finetune_regular_ema.yaml
-kubectl apply -f yaml2/run_wan_finetune_monarch_fast_tied_frame_ema.yaml
-kubectl apply -f yaml2/run_self_forcing_ema.yaml
-kubectl apply -f yaml2/run_monarch_fast_framewise_dense_init_ema.yaml
+# kubectl apply -f yaml2/run_wan_finetune_regular_ema.yaml
+# kubectl apply -f yaml2/run_wan_finetune_monarch_fast_tied_frame_ema.yaml
+# kubectl apply -f yaml2/run_self_forcing_ema.yaml
+# kubectl apply -f yaml2/run_monarch_fast_framewise_dense_init_ema.yaml
+
+kubectl apply -f yaml2/run_monarch_fast_framewise_dense_init2_ema.yaml
+kubectl apply -f yaml2/run_wan_finetune_monarch_fast_tied_frame2_ema.yaml
