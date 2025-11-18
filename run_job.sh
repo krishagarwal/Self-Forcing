@@ -81,9 +81,9 @@
 
 ############## NEW RUNS ###############
 
-kubectl apply -f yaml/run_monarch_oracle0.yaml
-kubectl apply -f yaml/run_monarch_oracle1.yaml
-kubectl apply -f yaml/run_monarch_oracle2.yaml
+# kubectl apply -f yaml/run_monarch_oracle0.yaml
+# kubectl apply -f yaml/run_monarch_oracle1.yaml
+# kubectl apply -f yaml/run_monarch_oracle2.yaml
 kubectl apply -f yaml/run_self_forcing_topk.yaml
 
 # kubectl apply -f yaml/run_monarch_oracle0_exact.yaml
