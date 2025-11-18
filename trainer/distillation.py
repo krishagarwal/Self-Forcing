@@ -533,13 +533,16 @@ class Trainer:
             with open("prompts/vbench/all_dimension.txt", "r") as f:
                 names = [line.strip() for line in f.readlines()]
         else:
-            names = [prompt[:200] for prompt in prompts]
+            names = [prompt[:100] for prompt in prompts]
         with torch.no_grad():
             self.model.generator.eval()
-            bsz_per_gpu = max(1, (len(prompts) + self.world_size - 1) // self.world_size)
-            print(f"rank {self.global_rank} processing {self.global_rank * bsz_per_gpu} to {(self.global_rank + 1) * bsz_per_gpu}")
+            bsz_per_gpu = len(prompts) // self.world_size
+            print(f"rank {self.global_rank} processing {self.global_rank * bsz_per_gpu} to {(self.global_rank + 1) * bsz_per_gpu}{" + one extra prompt" if self.global_rank < len(prompts) % self.world_size else ""}")
             local_prompts = prompts[self.global_rank * bsz_per_gpu: (self.global_rank + 1) * bsz_per_gpu]
             local_names = names[self.global_rank * bsz_per_gpu: (self.global_rank + 1) * bsz_per_gpu]
+            if self.global_rank < len(prompts) % self.world_size:
+                local_prompts.append(prompts[-self.global_rank - 1])
+                local_names.append(names[-self.global_rank - 1])
             for sample_num in range(samples):
                 validation = []
                 for prompt in local_prompts:
@@ -549,12 +552,12 @@ class Trainer:
                             prompts=[prompt],
                         )
                     )
-                if len(local_prompts) < bsz_per_gpu:
-                    for _ in range(bsz_per_gpu - len(local_prompts)):
-                        self.generate_video(
-                            self.val_pipeline,
-                            prompts=["dummy_prompt"],
-                        )
+                if len(local_prompts) % self.world_size != 0 and self.global_rank >= len(prompts) % self.world_size:
+                    # run extra prompt to keep sync
+                    self.generate_video(
+                        self.val_pipeline,
+                        prompts=["dummy_prompt"],
+                    )
                 all_prompts = list(local_prompts)
                 all_names = list(local_names)
                 all_videos = list(validation)
