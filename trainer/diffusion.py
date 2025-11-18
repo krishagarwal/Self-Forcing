@@ -194,6 +194,7 @@ class Trainer:
                 all_prompts = [line.strip() for line in f.readlines()]
             self.benchmark_prompts = all_prompts
             self.benchmark_samples = config.benchmark_samples if hasattr(config, 'benchmark_samples') else 1
+            self.rename_prompts = (not config.disable_benchmark_rename) if hasattr(config, 'disable_benchmark_rename') else True
         else:
             self.benchmark_prompts = None
             self.benchmark_samples = 0
@@ -468,11 +469,14 @@ class Trainer:
         barrier()
 
     def run_final_validation(self, prompts=None, samples=1, filename_fn=None):
-        with open("prompts/vbench/all_dimension.txt", "r") as f:
-            names = [line.strip() for line in f.readlines()]
+        prompts = prompts if prompts is not None else self.val_prompts
+        if self.rename_prompts:
+            with open("prompts/vbench/all_dimension.txt", "r") as f:
+                names = [line.strip() for line in f.readlines()]
+        else:
+            names = [prompt[:200] for prompt in prompts]
         with torch.no_grad():
             self.model.generator.eval()
-            prompts = prompts if prompts is not None else self.val_prompts
             bsz_per_gpu = max(1, (len(prompts) + self.world_size - 1) // self.world_size)
             print(f"rank {self.global_rank} processing {self.global_rank * bsz_per_gpu} to {(self.global_rank + 1) * bsz_per_gpu}")
             local_prompts = prompts[self.global_rank * bsz_per_gpu: (self.global_rank + 1) * bsz_per_gpu]
