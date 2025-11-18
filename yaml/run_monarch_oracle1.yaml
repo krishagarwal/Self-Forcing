@@ -34,9 +34,9 @@ spec:
                       - key: node.kubernetes.io/instance-type
                         operator: In
                         values:
-                          - p5.48xlarge
+                          - p5en.48xlarge
           tolerations:
-            - key: ikiss-swe-skills-p5
+            - key: guparpit-nb-swe-ac
               operator: Equal
               value: "True"
               effect: NoSchedule
@@ -112,15 +112,15 @@ spec:
                   pip install -r requirements.txt &&
                   pip install flashinfer-python &&
                   python setup.py develop &&
-                  mkdir -p /code-fsx/beidchen-sandbox/vbench_eval_results/self_forcing_monarch_oracle_slow_2xh &&
-                  mkdir -p /code-fsx/beidchen-sandbox/self_forcing_logs/self_forcing_monarch_oracle_slow_2xh &&
+                  mkdir -p /code-fsx/beidchen-sandbox/vbench_eval_results/self_forcing_monarch_oracle_veryslow_2xh &&
+                  mkdir -p /code-fsx/beidchen-sandbox/self_forcing_logs/self_forcing_monarch_oracle_veryslow_2xh &&
                   export MONARCH_ATTN_TARGET_SPARSITY=0.65 &&
-                  export MONARCH_ATTN_NUM_ITERS=8 &&
+                  export MONARCH_ATTN_NUM_ITERS=20 &&
                   export MONARCH_ATTN_W_REDUCE=1 &&
                   export MONARCH_ATTN_H_REDUCE=2 &&
                   export MONARCH_ATTN_FRAMEWISE=1 &&
                   export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True &&
-                  torchrun --nproc_per_node=8 --rdzv-conf="timeout=7200,read_timeout=7200,join_timeout=7200" train.py --wandb-save-dir /workspace/wandb --config_path configs/self_forcing_inference_only.yaml --logdir /code-fsx/beidchen-sandbox/self_forcing_logs/self_forcing_monarch_oracle_slow_2xh --wandb_name dmd_monarch_oracle_slow_2xh | tee /code-fsx/beidchen-sandbox/self_forcing_monarch_oracle_slow_2xh.log
+                  torchrun --nproc_per_node=8 --rdzv-conf="timeout=7200,read_timeout=7200,join_timeout=7200" train.py --wandb-save-dir /workspace/wandb --config_path configs/self_forcing_inference_only.yaml --logdir /code-fsx/beidchen-sandbox/self_forcing_logs/self_forcing_monarch_oracle_veryslow_2xh --wandb_name dmd_monarch_oracle_veryslow_2xh | tee /code-fsx/beidchen-sandbox/self_forcing_monarch_oracle_veryslow_2xh.log
               image: 767397878797.dkr.ecr.us-east-1.amazonaws.com/agif-mm-pt-base:reasoning-vllm.sglang.megatron.deepseek.video.fa3
               imagePullPolicy: Always
               securityContext:
@@ -179,13 +179,13 @@ spec:
           volumes:
             - name: fsx-claim-general--atl-2a1
               persistentVolumeClaim:
-                claimName: fsx-claim-general-a1
+                claimName: fsx-claim-general--atl-2a1
             - name: fsx-claim-general--atl-2a2
               persistentVolumeClaim:
-                claimName: fsx-claim-general-a4
+                claimName: fsx-claim-general--atl-2a2
             - name: fsx-claim-general--atl-2a3
               persistentVolumeClaim:
-                claimName: fsx-claim-general-a3
+                claimName: fsx-claim-general--atl-2a3
             - name: infiniband-efa-0
               hostPath:
                 path: /dev/infiniband/uverbs0

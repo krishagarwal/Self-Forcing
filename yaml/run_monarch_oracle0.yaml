@@ -36,7 +36,7 @@ spec:
                         values:
                           - p5en.48xlarge
           tolerations:
-            - key: srivee-long-context
+            - key: guparpit-nb-swe-ac
               operator: Equal
               value: "True"
               effect: NoSchedule
@@ -112,15 +112,15 @@ spec:
                   pip install -r requirements.txt &&
                   pip install flashinfer-python &&
                   python setup.py develop &&
-                  mkdir -p /code-fsx/beidchen-sandbox/vbench_eval_results/self_forcing_monarch_oracle_slow_maxsparse &&
-                  mkdir -p /code-fsx/beidchen-sandbox/self_forcing_logs/self_forcing_monarch_oracle_slow_maxsparse &&
+                  mkdir -p /code-fsx/beidchen-sandbox/vbench_eval_results/self_forcing_monarch_oracle_veryslow_maxsparse &&
+                  mkdir -p /code-fsx/beidchen-sandbox/self_forcing_logs/self_forcing_monarch_oracle_veryslow_maxsparse &&
                   export MONARCH_ATTN_TARGET_SPARSITY=0.65 &&
-                  export MONARCH_ATTN_NUM_ITERS=8 &&
+                  export MONARCH_ATTN_NUM_ITERS=20 &&
                   export MONARCH_ATTN_W_REDUCE=1 &&
                   export MONARCH_ATTN_H_REDUCE=1 &&
                   export MONARCH_ATTN_FRAMEWISE=1 &&
                   export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True &&
-                  torchrun --nproc_per_node=8 --rdzv-conf="timeout=7200,read_timeout=7200,join_timeout=7200" train.py --wandb-save-dir /workspace/wandb --config_path configs/self_forcing_inference_only.yaml --logdir /code-fsx/beidchen-sandbox/self_forcing_logs/self_forcing_monarch_oracle_slow_maxsparse --wandb_name dmd_monarch_oracle_slow_maxsparse | tee /code-fsx/beidchen-sandbox/self_forcing_monarch_oracle_slow_maxsparse.log
+                  torchrun --nproc_per_node=8 --rdzv-conf="timeout=7200,read_timeout=7200,join_timeout=7200" train.py --wandb-save-dir /workspace/wandb --config_path configs/self_forcing_inference_only.yaml --logdir /code-fsx/beidchen-sandbox/self_forcing_logs/self_forcing_monarch_oracle_veryslow_maxsparse --wandb_name dmd_monarch_oracle_veryslow_maxsparse | tee /code-fsx/beidchen-sandbox/self_forcing_monarch_oracle_veryslow_maxsparse.log
               image: 767397878797.dkr.ecr.us-east-1.amazonaws.com/agif-mm-pt-base:reasoning-vllm.sglang.megatron.deepseek.video.fa3
               imagePullPolicy: Always
               securityContext:

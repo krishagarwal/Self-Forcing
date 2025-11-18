@@ -717,10 +717,8 @@ class CausalWanSelfAttention(nn.Module):
         assert not (self.use_framewise and self.use_initialize), "Framewise already enabled, init does not make sense"
         self.disable_monarch = bool(int(os.getenv("DISABLE_MONARCH_ATTN", "0")))
         layer_disable_list = os.getenv("MONARCH_ATTN_DISABLE_LAYERS")
-        self.topk = os.getenv("ATTN_TOPK_PCT")
         self.use_hacks = bool(int(os.getenv("USE_HACKS", "0")))
-        if self.topk is not None:
-            self.topk = float(self.topk)
+        self.topk = float(os.getenv("ATTN_TOPK_PCT", "0.0"))
         if layer_disable_list is not None:
             assert block_num is not None
             layer_disable_list = [int(x) for x in layer_disable_list.split(",")]
@@ -935,7 +933,7 @@ class CausalWanSelfAttention(nn.Module):
             curr_k = kv_cache["k"][:, max(0, local_end_index - self.max_attention_size):local_end_index]
             curr_v = kv_cache["v"][:, max(0, local_end_index - self.max_attention_size):local_end_index]
             if (self.disable_monarch and not self.use_svg and not self.use_radial_attn) or (self.use_dense_init and curr_k.size(1) == (3 * grid_sizes[0, 1].item() * grid_sizes[0, 2].item())):
-                if self.topk is not None:
+                if self.topk != 0.0:
                     qk = torch.einsum('bihd,bjhd->bhij', roped_query, curr_k) * (d ** -0.5)
                     _, bottomk = qk.topk(dim=-1, k=int((1 - self.topk) * qk.size(-1)), largest=False)
                     qk.scatter_(-1, bottomk, -torch.inf)
