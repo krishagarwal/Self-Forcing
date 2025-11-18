@@ -286,6 +286,39 @@ class MonarchAttnImplicitFn(torch.autograd.Function):
         grad_K = grad_K * ctx.sm_scale_sqrt
         return grad_Q, grad_K, grad_V, None, None, None
 
+def low_rank_project(M, rank):
+    U, S, Vt = torch.linalg.svd(M.float())
+    S_sqrt = S[..., :rank].sqrt()
+    U = U[..., :rank] * rearrange(S_sqrt, '... rank -> ... 1 rank')
+    Vt = rearrange(S_sqrt, '... rank -> ... rank 1') * Vt[..., :rank, :]
+    return U, Vt
+
+def low_rank_project_faster(M, rank):
+    # batched svd is very slow, flatten the first n-2 dims and run it per slice
+    orig_shape = M.shape[:-2]
+    M_flat = M.reshape(-1, M.size(-2), M.size(-1))
+    all_U = []
+    all_Vt = []
+    batch_size = 32
+    for i in range(0, M_flat.size(0), batch_size):
+        U, Vt = low_rank_project(M_flat[i:i+batch_size], rank)
+        all_U.append(U)
+        all_Vt.append(Vt)
+    U = torch.cat(all_U, dim=0).reshape(*orig_shape, M.size(-2), rank)
+    Vt = torch.cat(all_Vt, dim=0).reshape(*orig_shape, rank, M.size(-1))
+    return U, Vt
+
+def monarch_attn_exact_decomp(Q, K, V, sm_scale):
+    attn = torch.einsum("baijhd,bfklhd->bhaijfkl", Q, K)
+    attn = (attn * sm_scale).flatten(-3).softmax(dim=-1)
+    attn = rearrange(attn, "b h a i j (f k l) -> b h a f j k i l", f=K.size(-5), k=K.size(-4), l=K.size(-3))
+    L, R = low_rank_project_faster(attn, rank=1)
+    L = L.squeeze(-1)
+    R = R.squeeze(-2)
+    attn = torch.einsum("bhafjki,bhafjkl->bhafijkl", L, R)
+    out = torch.einsum("bhafijkl,bfklhd->baijhd", attn.to(V.dtype), V)
+    return out
+
 # class MonarchAttnImplicitFn(torch.autograd.Function):
 #     @staticmethod
 #     def forward(ctx, Q, K, V, sm_scale, num_iters, eps):
@@ -716,6 +749,7 @@ class CausalWanSelfAttention(nn.Module):
         self.use_framewise = bool(int(os.getenv("MONARCH_ATTN_FRAMEWISE", "0")))
         assert not (self.use_framewise and self.use_initialize), "Framewise already enabled, init does not make sense"
         self.disable_monarch = bool(int(os.getenv("DISABLE_MONARCH_ATTN", "0")))
+        self.exact_monarch = bool(int(os.getenv("MONARCH_ATTN_EXACT", "0")))
         layer_disable_list = os.getenv("MONARCH_ATTN_DISABLE_LAYERS")
         self.use_hacks = bool(int(os.getenv("USE_HACKS", "0")))
         self.topk = float(os.getenv("ATTN_TOPK_PCT", "0.0"))
@@ -1103,7 +1137,10 @@ class CausalWanSelfAttention(nn.Module):
                 curr_q = rearrange_fn(roped_query)
                 curr_k = rearrange_fn(curr_k)
                 curr_v = rearrange_fn(curr_v)
-                x = return_fn(monarch_attn(curr_q, curr_k, curr_v, d ** -0.5, self.num_iters, self.eps))
+                if self.exact_monarch:
+                    x = return_fn(monarch_attn_exact_decomp(curr_q, curr_k, curr_v, d ** -0.5))
+                else:
+                    x = return_fn(monarch_attn(curr_q, curr_k, curr_v, d ** -0.5, self.num_iters, self.eps))
 
             kv_cache["global_end_index"].fill_(current_end)
             kv_cache["local_end_index"].fill_(local_end_index)
