@@ -112,12 +112,13 @@ spec:
                   pip install -r requirements.txt &&
                   pip install flashinfer-python &&
                   python setup.py develop &&
-                  mkdir -p /code-fsx/beidchen-sandbox/vbench_eval_results/self_forcing_topk &&
-                  mkdir -p /code-fsx/beidchen-sandbox/self_forcing_logs/self_forcing_topk &&
+                  mkdir -p /code-fsx/beidchen-sandbox/vbench_eval_results/self_forcing_topk_denseinit &&
+                  mkdir -p /code-fsx/beidchen-sandbox/self_forcing_logs/self_forcing_topk_denseinit &&
                   export DISABLE_MONARCH_ATTN=1 &&
                   export ATTN_TOPK_PCT=0.15 &&
                   export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True &&
-                  torchrun --nproc_per_node=8 --rdzv-conf="timeout=7200,read_timeout=7200,join_timeout=7200" train.py --wandb-save-dir /workspace/wandb --config_path configs/self_forcing_inference_only.yaml --logdir /code-fsx/beidchen-sandbox/self_forcing_logs/self_forcing_topk --wandb_name dmd_topk | tee /code-fsx/beidchen-sandbox/self_forcing_topk.log
+                  export USE_DENSE_INIT=1 &&
+                  torchrun --nproc_per_node=8 --rdzv-conf="timeout=7200,read_timeout=7200,join_timeout=7200" train.py --wandb-save-dir /workspace/wandb --config_path configs/self_forcing_inference_only.yaml --logdir /code-fsx/beidchen-sandbox/self_forcing_logs/self_forcing_topk_denseinit --wandb_name dmd_topk_denseinit | tee /code-fsx/beidchen-sandbox/self_forcing_topk_denseinit.log
               image: 767397878797.dkr.ecr.us-east-1.amazonaws.com/agif-mm-pt-base:reasoning-vllm.sglang.megatron.deepseek.video.fa3
               imagePullPolicy: Always
               securityContext:

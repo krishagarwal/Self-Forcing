@@ -966,8 +966,9 @@ class CausalWanSelfAttention(nn.Module):
             #           ptr, "to", kv_cache["k"].data_ptr())
             curr_k = kv_cache["k"][:, max(0, local_end_index - self.max_attention_size):local_end_index]
             curr_v = kv_cache["v"][:, max(0, local_end_index - self.max_attention_size):local_end_index]
-            if (self.disable_monarch and not self.use_svg and not self.use_radial_attn) or (self.use_dense_init and curr_k.size(1) == (3 * grid_sizes[0, 1].item() * grid_sizes[0, 2].item())):
-                if self.topk != 0.0:
+            is_init = (self.use_dense_init and curr_k.size(1) == (3 * grid_sizes[0, 1].item() * grid_sizes[0, 2].item()))
+            if (self.disable_monarch and not self.use_svg and not self.use_radial_attn) or is_init:
+                if not is_init and self.topk != 0.0:
                     qk = torch.einsum('bihd,bjhd->bhij', roped_query, curr_k) * (d ** -0.5)
                     _, bottomk = qk.topk(dim=-1, k=int((1 - self.topk) * qk.size(-1)), largest=False)
                     qk.scatter_(-1, bottomk, -torch.inf)
