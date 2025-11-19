@@ -580,11 +580,17 @@ class WanSelfAttention(nn.Module):
 
         if self.disable_monarch and not self.use_svg and not self.use_radial_attn:
             if self.topk != 0.0:
-                qk = torch.einsum('bihd,bjhd->bhij', roped_query, roped_key) * (d ** -0.5)
-                _, bottomk = qk.topk(dim=-1, k=int((1 - self.topk) * qk.size(-1)), largest=False)
-                qk.scatter_(-1, bottomk, -torch.inf)
-                attn = torch.softmax(qk, dim=-1)
-                x = torch.einsum('bhij,bjhd->bihd', attn, v)
+                x_all = []
+                s = roped_query.size(1)
+                for start in range(0, s, s // 4):
+                    roped_query_i = roped_query[:, start:start + s // 2, :, :]
+                    qk = torch.einsum('bihd,bjhd->bhij', roped_query_i, roped_key) * (d ** -0.5)
+                    _, bottomk = qk.topk(dim=-1, k=int((1 - self.topk) * qk.size(-1)), largest=False)
+                    qk.scatter_(-1, bottomk, -torch.inf)
+                    qk = torch.softmax(qk, dim=-1)
+                    x = torch.einsum('bhij,bjhd->bihd', qk, v)
+                    x_all.append(x)
+                x = torch.cat(x_all, dim=1)
             else:
                 x = flash_attention(
                     q=roped_query,
