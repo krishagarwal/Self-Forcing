@@ -99,5 +99,5 @@
 # kubectl apply -f yaml2/run_wan_finetune_monarch_fast_tied_frame2_ema.yaml
 
 # kubectl apply -f yaml/run_wan_finetune_radial_attn.yaml
-# kubectl apply -f yaml/run_wan_finetune_svg.yaml
-kubectl apply -f yaml/run_wan_finetune_topk.yaml
+kubectl apply -f yaml/run_wan_finetune_svg.yaml
+# kubectl apply -f yaml/run_wan_finetune_topk.yaml
