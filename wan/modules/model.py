@@ -582,8 +582,9 @@ class WanSelfAttention(nn.Module):
             if self.topk != 0.0:
                 x_all = []
                 s = roped_query.size(1)
-                for start in range(0, s, s // 4):
-                    roped_query_i = roped_query[:, start:start + s // 2, :, :]
+                num_chunks = 16
+                for start in range(0, s, s // num_chunks):
+                    roped_query_i = roped_query[:, start:start + s // num_chunks, :, :]
                     qk = torch.einsum('bihd,bjhd->bhij', roped_query_i, roped_key) * (d ** -0.5)
                     _, bottomk = qk.topk(dim=-1, k=int((1 - self.topk) * qk.size(-1)), largest=False)
                     qk.scatter_(-1, bottomk, -torch.inf)
