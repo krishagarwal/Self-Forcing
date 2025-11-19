@@ -1,4 +1,4 @@
-generator_ckpt: /code-fsx/beidchen-sandbox/self_forcing_logs/finetune_wan_regular/checkpoint_model_001000/model.pt
+generator_ckpt: wan_models/Wan2.1-T2V-1.3B/diffusion_pytorch_model.safetensors
 generator_fsdp_wrap_strategy: size
 real_score_fsdp_wrap_strategy: size
 fake_score_fsdp_wrap_strategy: size
