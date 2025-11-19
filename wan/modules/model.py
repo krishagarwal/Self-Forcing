@@ -9,6 +9,9 @@ from diffusers.models.modeling_utils import ModelMixin
 from einops import repeat, rearrange
 
 from .attention import flash_attention
+from .sparse_videogen.attention import sparse_attention, Wan_SparseAttn, prepare_flexattention, prepare_dense_attention
+from .sparse_videogen.utils import get_attention_mask, sparsity_to_width
+from .radial_attn.attn_mask import MaskMap, RadialAttention
 
 __all__ = ['WanModel']
 
@@ -489,7 +492,8 @@ class WanSelfAttention(nn.Module):
                  num_heads,
                  window_size=(-1, -1),
                  qk_norm=True,
-                 eps=1e-6):
+                 eps=1e-6,
+                 block_num=None):
         assert dim % num_heads == 0
         super().__init__()
         self.dim = dim
@@ -505,6 +509,19 @@ class WanSelfAttention(nn.Module):
             self.target_sparsity = float(self.target_sparsity)
         self.num_iters = int(os.getenv("MONARCH_ATTN_NUM_ITERS", "1"))
         self.disable_monarch = bool(int(os.getenv("DISABLE_MONARCH_ATTN", "0")))
+        self.use_hacks = bool(int(os.getenv("USE_HACKS", "0")))
+        self.topk = float(os.getenv("ATTN_TOPK_PCT", "0.0"))
+        layer_disable_list = os.getenv("MONARCH_ATTN_DISABLE_LAYERS")
+        if layer_disable_list is not None:
+            assert block_num is not None
+            layer_disable_list = [int(x) for x in layer_disable_list.split(",")]
+            if block_num in layer_disable_list:
+                self.disable_monarch = True
+        self.use_svg = bool(int(os.getenv("USE_SVG", "0")))
+        self.use_radial_attn = bool(int(os.getenv("USE_RADIAL_ATTN", "0")))
+        if self.use_radial_attn:
+            self.mask_map = None
+        self.block_num = block_num
 
         # layers
         self.q = nn.Linear(dim, dim)
@@ -540,7 +557,7 @@ class WanSelfAttention(nn.Module):
         # min_idx = dists.index(min(dists))
         # return (factors[min_idx], w)
 
-    def forward(self, x, seq_lens, grid_sizes, freqs):
+    def forward(self, x, seq_lens, grid_sizes, freqs, timestep=None):
         r"""
         Args:
             x(Tensor): Shape [B, L, num_heads, C / num_heads]
@@ -558,20 +575,107 @@ class WanSelfAttention(nn.Module):
             return q, k, v
 
         q, k, v = qkv_fn(x)
+        roped_query = rope_apply(q, grid_sizes, freqs)
+        roped_key = rope_apply(k, grid_sizes, freqs)
 
-        if self.disable_monarch:
-            x = flash_attention(
-                q=rope_apply(q, grid_sizes, freqs),
-                k=rope_apply(k, grid_sizes, freqs),
-                v=v,
-                k_lens=seq_lens,
-                window_size=self.window_size)
+        if self.disable_monarch and not self.use_svg and not self.use_radial_attn:
+            if self.topk != 0.0:
+                qk = torch.einsum('bihd,bjhd->bhij', roped_query, roped_key) * (d ** -0.5)
+                _, bottomk = qk.topk(dim=-1, k=int((1 - self.topk) * qk.size(-1)), largest=False)
+                qk.scatter_(-1, bottomk, -torch.inf)
+                attn = torch.softmax(qk, dim=-1)
+                x = torch.einsum('bhij,bjhd->bihd', attn, v)
+            else:
+                x = flash_attention(
+                    q=roped_query,
+                    k=roped_key,
+                    v=v,
+                    k_lens=seq_lens,
+                    window_size=self.window_size)
+        elif self.use_svg:
+            target_seq_len = roped_query.size(1)
+            if Wan_SparseAttn.curr_seq_len != target_seq_len:
+                sample_mse_max_row = 100000
+                Wan_SparseAttn.num_sampled_rows = 64
+                Wan_SparseAttn.sample_mse_max_row = sample_mse_max_row
+                num_frame_patches = target_seq_len // (30 * 52)
+                frame_patches_one_frame = 30 * 52
+                masks = ["spatial", "temporal"]
+                Wan_SparseAttn.attention_masks = [
+                    get_attention_mask(
+                        mask_name, sample_mse_max_row, 0, num_frame_patches, frame_patches_one_frame
+                    )
+                    for mask_name in masks
+                ]
+                Wan_SparseAttn.first_layers_fp = 0.025 if self.use_hacks else 0
+                Wan_SparseAttn.first_times_fp = 0.036 if self.use_hacks else 0 # 0.036 covers first 12 timesteps
+
+                multiplier = diag_width = sparsity_to_width(
+                    0.15, 0, num_frame_patches, frame_patches_one_frame
+                )
+                Wan_SparseAttn.context_length = 0
+                Wan_SparseAttn.num_frame = num_frame_patches
+                Wan_SparseAttn.frame_size = frame_patches_one_frame
+                Wan_SparseAttn.block_mask = prepare_flexattention(
+                    1,
+                    12,
+                    128,
+                    q.dtype,
+                    q.device,
+                    0,
+                    0,
+                    num_frame_patches,
+                    frame_patches_one_frame,
+                    diag_width,
+                    multiplier
+                )
+                Wan_SparseAttn.dense_block_mask = prepare_dense_attention(
+                    1,
+                    12,
+                    128,
+                    q.dtype,
+                    q.device,
+                    0,
+                    0,
+                    num_frame_patches,
+                    frame_patches_one_frame,
+                )
+                Wan_SparseAttn.curr_seq_len = target_seq_len
+
+            assert roped_query.shape == roped_key.shape
+            Wan_SparseAttn.sample_mse_min_row = 0
+            Wan_SparseAttn.sample_mse_max_row = roped_key.size(1)
+
+            x = sparse_attention(
+                roped_query,
+                roped_key,
+                v,
+                layer_idx=self.block_num,
+                timestep=timestep,
+            )
+            assert x.shape == roped_query.shape
+        elif self.use_radial_attn:
+            # 0.036 covers first 12 timesteps
+            if ((timestep > 1000 * (1 - 0.036)) or self.block_num < 1) and self.use_hacks:
+                x = flash_attention(
+                    q=roped_query,
+                    k=roped_key,
+                    v=v,
+                    k_lens=seq_lens,
+                    window_size=self.window_size)
+            else:
+                if self.mask_map is None:
+                    self.mask_map = MaskMap(video_token_num=roped_key.size(1), num_frame=roped_key.size(1)//(30*52))
+                assert roped_query.shape == roped_key.shape
+                x = RadialAttention(
+                    roped_query, roped_key, v, self.mask_map, sparsity_type="radial", block_size=1, decay_factor=0.0, model_type="wan", pre_defined_mask=None, use_sage_attention=False
+                )
+                x = rearrange(x, 'b s (h d) -> b s h d', d=d)
+                assert x.shape == roped_query.shape
         else:
             h1, w1 = grid_sizes[0, 1].item(), grid_sizes[0, 2].item()
             block_b1, block_b2 = self.get_block_sizes(q.size(1), h1, w1)
             b, s, h, d = q.shape
-            q = rope_apply(q, grid_sizes, freqs)
-            k = rope_apply(k, grid_sizes, freqs)
             # q = q.view(b, -1, block_b1, block_b2, h, d)
             # k = k.view(b, -1, block_b1, block_b2, h, d)
             # v = v.view(b, -1, block_b1, block_b2, h, d)
@@ -619,11 +723,10 @@ class WanSelfAttention(nn.Module):
                 def return_fn(x):
                     return rearrange(x, 'b (a c e) (f i) j h d -> b (a f c i e j) h d', c=h1 // block_b1, e=w1 // block_b2, f=f_per_set)
 
-            q = rearrange_fn(q)
-            k = rearrange_fn(k)
+            roped_query = rearrange_fn(roped_query)
+            roped_key = rearrange_fn(roped_key)
             v = rearrange_fn(v)
-
-            x = return_fn(monarch_attn(q, k, v, d ** -0.5, self.num_iters, self.eps))
+            x = return_fn(monarch_attn(roped_query, roped_key, v, d ** -0.5, self.num_iters, self.eps))
 
         # output
         x = x.flatten(2)
@@ -757,7 +860,8 @@ class WanAttentionBlock(nn.Module):
                  window_size=(-1, -1),
                  qk_norm=True,
                  cross_attn_norm=False,
-                 eps=1e-6):
+                 eps=1e-6,
+                 block_num=None):
         super().__init__()
         self.dim = dim
         self.ffn_dim = ffn_dim
@@ -770,7 +874,7 @@ class WanAttentionBlock(nn.Module):
         # layers
         self.norm1 = WanLayerNorm(dim, eps)
         self.self_attn = WanSelfAttention(dim, num_heads, window_size, qk_norm,
-                                          eps)
+                                          eps, block_num)
         self.norm3 = WanLayerNorm(
             dim, eps,
             elementwise_affine=True) if cross_attn_norm else nn.Identity()
@@ -796,6 +900,7 @@ class WanAttentionBlock(nn.Module):
         freqs,
         context,
         context_lens,
+        timestep=None,
     ):
         r"""
         Args:
@@ -813,7 +918,7 @@ class WanAttentionBlock(nn.Module):
         # self-attention
         y = self.self_attn(
             self.norm1(x) * (1 + e[1]) + e[0], seq_lens, grid_sizes,
-            freqs)
+            freqs, timestep)
         # with amp.autocast(dtype=torch.float32):
         x = x + y * e[2]
 
@@ -1070,8 +1175,8 @@ class WanModel(ModelMixin, ConfigMixin):
         cross_attn_type = 't2v_cross_attn' if model_type == 't2v' else 'i2v_cross_attn'
         self.blocks = nn.ModuleList([
             WanAttentionBlock(cross_attn_type, dim, ffn_dim, num_heads,
-                              window_size, qk_norm, cross_attn_norm, eps)
-            for _ in range(num_layers)
+                              window_size, qk_norm, cross_attn_norm, eps, i)
+            for i in range(num_layers)
         ])
 
         # head
@@ -1187,6 +1292,9 @@ class WanModel(ModelMixin, ConfigMixin):
         if clip_fea is not None:
             context_clip = self.img_emb(clip_fea)  # bs x 257 x dim
             context = torch.concat([context_clip, context], dim=1)
+        
+        timestep = t.flatten()[0].item()
+        assert (t == timestep).all()
 
         # arguments
         kwargs = dict(
@@ -1195,7 +1303,8 @@ class WanModel(ModelMixin, ConfigMixin):
             grid_sizes=grid_sizes,
             freqs=self.freqs,
             context=context,
-            context_lens=context_lens)
+            context_lens=context_lens,
+            timestep=timestep)
 
         def create_custom_forward(module):
             def custom_forward(*inputs, **kwargs):
