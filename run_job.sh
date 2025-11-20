@@ -95,9 +95,16 @@
 # kubectl apply -f yaml2/run_self_forcing_ema.yaml
 # kubectl apply -f yaml2/run_monarch_fast_framewise_dense_init_ema.yaml
 
-kubectl apply -f yaml2/run_monarch_fast_framewise_dense_init3_ema.yaml
+# kubectl apply -f yaml2/run_monarch_fast_framewise_dense_init3_ema.yaml
 # kubectl apply -f yaml2/run_wan_finetune_monarch_fast_tied_frame2_ema.yaml
 
 # kubectl apply -f yaml/run_wan_finetune_radial_attn.yaml
 # kubectl apply -f yaml/run_wan_finetune_svg.yaml
 # kubectl apply -f yaml/run_wan_finetune_topk.yaml
+
+kubectl apply -f yaml/run_monarch_oracle0.yaml
+kubectl apply -f yaml/run_monarch_oracle1.yaml
+kubectl apply -f yaml/run_monarch_oracle3.yaml
+kubectl apply -f yaml/run_monarch_oracle4.yaml
+kubectl apply -f yaml/run_self_forcing_topk.yaml
+kubectl apply -f yaml3/run_self_forcing_radial_attn.yaml
