@@ -277,28 +277,28 @@ class Trainer:
 
         return obj
 
-    def save(self):
-        print("Start gathering distributed model states...")
-        generator_state_dict = fsdp_state_dict(
-            self.model.generator)
+    # def save(self):
+    #     print("Start gathering distributed model states...")
+    #     generator_state_dict = fsdp_state_dict(
+    #         self.model.generator)
 
-        if self.config.ema_start_step < self.step:
-            state_dict = {
-                "generator": generator_state_dict,
-                "generator_ema": self.generator_ema.state_dict(),
-            }
-        else:
-            state_dict = {
-                "generator": generator_state_dict,
-            }
+    #     if self.config.ema_start_step < self.step:
+    #         state_dict = {
+    #             "generator": generator_state_dict,
+    #             "generator_ema": self.generator_ema.state_dict(),
+    #         }
+    #     else:
+    #         state_dict = {
+    #             "generator": generator_state_dict,
+    #         }
 
-        if self.is_main_process:
-            os.makedirs(os.path.join(self.output_path,
-                        f"checkpoint_model_{self.step:06d}"), exist_ok=True)
-            torch.save(state_dict, os.path.join(self.output_path,
-                       f"checkpoint_model_{self.step:06d}", "model.pt"))
-            print("Model saved to", os.path.join(self.output_path,
-                  f"checkpoint_model_{self.step:06d}", "model.pt"))
+    #     if self.is_main_process:
+    #         os.makedirs(os.path.join(self.output_path,
+    #                     f"checkpoint_model_{self.step:06d}"), exist_ok=True)
+    #         torch.save(state_dict, os.path.join(self.output_path,
+    #                    f"checkpoint_model_{self.step:06d}", "model.pt"))
+    #         print("Model saved to", os.path.join(self.output_path,
+    #               f"checkpoint_model_{self.step:06d}", "model.pt"))
     
     # def save(self):
     #     ckpt_dir = os.path.join(self.output_path, f"checkpoint_model_{self.step:06d}")
@@ -584,20 +584,20 @@ class Trainer:
     def train(self):
         start_step = self.step
 
-        while self.step <= 1000 and not self.inference_only:
-            if self.step % 100 == 0 and not (self.disable_wandb or self.val_prompts is None):
-                self.run_validation()
-                if self.generator_ema is not None:
-                    with self.use_generator_ema():
-                        self.run_validation("validation_videos_ema")
+        while self.step <= 2 and not self.inference_only:
+            # if self.step % 100 == 0 and not (self.disable_wandb or self.val_prompts is None):
+            #     self.run_validation()
+            #     if self.generator_ema is not None:
+            #         with self.use_generator_ema():
+            #             self.run_validation("validation_videos_ema")
 
             batch = next(self.dataloader)
             self.train_one_step(batch)
-            if (not self.config.no_save) and (self.step - start_step) > 0 and self.step % self.config.log_iters == 0:
+            if True:#(not self.config.no_save) and (self.step - start_step) > 0 and self.step % self.config.log_iters == 0:
                 torch.cuda.empty_cache()
-                if self.step == 1000:
-                    self.save()
-                    torch.cuda.empty_cache()
+                # if self.step == 1000:
+                self.save()
+                torch.cuda.empty_cache()
 
             barrier()
             if self.is_main_process:
