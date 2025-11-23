@@ -105,6 +105,7 @@ spec:
                   mkdir -p /workspace/wandb &&
                   export WANDB_DIR=/workspace/wandb &&
                   cd /dev/shm/ &&
+                  apt-get install git-lfs -y &&
                   git lfs install &&
                   git clone https://huggingface.co/Wan-AI/Wan2.1-T2V-14B &&
                   ln -s /dev/shm/Wan2.1-T2V-14B /workspace/Wan2.1-T2V-1.3B &&
