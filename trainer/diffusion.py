@@ -157,8 +157,10 @@ class Trainer:
                     print(f"  Loading shard: {os.path.basename(shard_path)}")
                     shard_state = load_file(shard_path, device="cpu")
                     state_dict.update(shard_state)
+                state_dict = {f"model.{k}" : v for k, v in state_dict.items()}
             elif checkpoint_path.endswith(".safetensors"):
                 state_dict = load_file(checkpoint_path, device="cpu")
+                state_dict = {f"model.{k}" : v for k, v in state_dict.items()}
             else:
                 state_dict = torch.load(checkpoint_path, map_location="cpu")
 
@@ -201,7 +203,7 @@ class Trainer:
         else:
             self.val_prompts = None
         
-        if config.benchmark_prompts_file is not None:
+        if hasattr(config, 'benchmark_prompts_file') and config.benchmark_prompts_file is not None:
             with open(config.benchmark_prompts_file, "r") as f:
                 all_prompts = [line.strip() for line in f.readlines()]
             self.benchmark_prompts = all_prompts
