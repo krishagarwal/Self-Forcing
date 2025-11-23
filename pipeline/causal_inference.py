@@ -289,8 +289,8 @@ class CausalInferencePipeline(torch.nn.Module):
 
         for _ in range(self.num_transformer_blocks):
             kv_cache1.append({
-                "k": torch.zeros([batch_size, kv_cache_size, self.generator.model.num_heads, self.generator.model.head_dim], dtype=dtype, device=device),
-                "v": torch.zeros([batch_size, kv_cache_size, self.generator.model.num_heads, self.generator.model.head_dim], dtype=dtype, device=device),
+                "k": torch.zeros([batch_size, kv_cache_size, self.generator.model.num_heads, self.generator.model.dim // self.generator.model.num_heads], dtype=dtype, device=device),
+                "v": torch.zeros([batch_size, kv_cache_size, self.generator.model.num_heads, self.generator.model.dim // self.generator.model.num_heads], dtype=dtype, device=device),
                 "global_end_index": torch.tensor([0], dtype=torch.long, device=device),
                 "local_end_index": torch.tensor([0], dtype=torch.long, device=device)
             })
