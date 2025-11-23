@@ -29,7 +29,7 @@ class CausalDiffusionInferencePipeline(torch.nn.Module):
         self.sample_solver = 'unipc'
         self.shift = args.timestep_shift
 
-        self.num_transformer_blocks = 30
+        self.num_transformer_blocks = self.generator.model.num_layers
         self.frame_seq_length = 1560
 
         self.kv_cache_pos = None
@@ -282,14 +282,14 @@ class CausalDiffusionInferencePipeline(torch.nn.Module):
 
         for _ in range(self.num_transformer_blocks):
             kv_cache_pos.append({
-                "k": torch.zeros([batch_size, kv_cache_size, 12, 128], dtype=dtype, device=device),
-                "v": torch.zeros([batch_size, kv_cache_size, 12, 128], dtype=dtype, device=device),
+                "k": torch.zeros([batch_size, kv_cache_size, self.generator.model.num_heads, self.generator.model.dim // self.generator.model.num_heads], dtype=dtype, device=device),
+                "v": torch.zeros([batch_size, kv_cache_size, self.generator.model.num_heads, self.generator.model.dim // self.generator.model.num_heads], dtype=dtype, device=device),
                 "global_end_index": torch.tensor([0], dtype=torch.long, device=device),
                 "local_end_index": torch.tensor([0], dtype=torch.long, device=device)
             })
             kv_cache_neg.append({
-                "k": torch.zeros([batch_size, kv_cache_size, 12, 128], dtype=dtype, device=device),
-                "v": torch.zeros([batch_size, kv_cache_size, 12, 128], dtype=dtype, device=device),
+                "k": torch.zeros([batch_size, kv_cache_size, self.generator.model.num_heads, self.generator.model.dim // self.generator.model.num_heads], dtype=dtype, device=device),
+                "v": torch.zeros([batch_size, kv_cache_size, self.generator.model.num_heads, self.generator.model.dim // self.generator.model.num_heads], dtype=dtype, device=device),
                 "global_end_index": torch.tensor([0], dtype=torch.long, device=device),
                 "local_end_index": torch.tensor([0], dtype=torch.long, device=device)
             })

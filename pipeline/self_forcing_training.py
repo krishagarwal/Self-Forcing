@@ -25,7 +25,7 @@ class SelfForcingTrainingPipeline:
             self.denoising_step_list = self.denoising_step_list[:-1]  # remove the zero timestep for inference
 
         # Wan specific hyperparameters
-        self.num_transformer_blocks = 30
+        self.num_transformer_blocks = self.generator.model.num_layers
         self.frame_seq_length = 1560
         self.num_frame_per_block = num_frame_per_block
         self.context_noise = context_noise
@@ -251,8 +251,8 @@ class SelfForcingTrainingPipeline:
 
         for _ in range(self.num_transformer_blocks):
             kv_cache1.append({
-                "k": torch.zeros([batch_size, self.kv_cache_size, 12, 128], dtype=dtype, device=device),
-                "v": torch.zeros([batch_size, self.kv_cache_size, 12, 128], dtype=dtype, device=device),
+                "k": torch.zeros([batch_size, self.kv_cache_size, self.generator.model.num_heads, self.generator.model.dim // self.generator.model.num_heads], dtype=dtype, device=device),
+                "v": torch.zeros([batch_size, self.kv_cache_size, self.generator.model.num_heads, self.generator.model.dim // self.generator.model.num_heads], dtype=dtype, device=device),
                 "global_end_index": torch.tensor([0], dtype=torch.long, device=device),
                 "local_end_index": torch.tensor([0], dtype=torch.long, device=device)
             })
