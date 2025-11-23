@@ -18,7 +18,8 @@ import os
 from utils.distributed import EMA_FSDP, barrier, fsdp_wrap, fsdp_state_dict, launch_distributed_job
 from torchvision.io import write_video
 from pipeline import CausalInferencePipeline, CausalDiffusionInferencePipeline, BidirectionalInferencePipeline, BidirectionalDiffusionInferencePipeline
-from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, StateDictType
+import torch.distributed.checkpoint as dist_cp
 
 from safetensors.torch import load_file
 
@@ -298,6 +299,65 @@ class Trainer:
                        f"checkpoint_model_{self.step:06d}", "model.pt"))
             print("Model saved to", os.path.join(self.output_path,
                   f"checkpoint_model_{self.step:06d}", "model.pt"))
+    
+    # def save(self):
+    #     ckpt_dir = os.path.join(self.output_path, f"checkpoint_model_{self.step:06d}")
+    #     os.makedirs(ckpt_dir, exist_ok=True)
+
+    #     with FSDP.state_dict_type(
+    #         self.model.generator,
+    #         StateDictType.LOCAL_STATE_DICT,
+    #     ):
+    #         generator_state_dict = self.model.generator.state_dict()
+
+    #     state_dict = {"generator": generator_state_dict}
+    #     if self.config.ema_start_step < self.step:
+    #         state_dict["generator_ema"] = self.generator_ema.state_dict()
+
+    #     writer = dist_cp.FileSystemWriter(ckpt_dir)
+    #     dist_cp.save(
+    #         state_dict=state_dict,
+    #         storage_writer=writer,
+    #     )
+
+    #     if self.is_main_process:
+    #         print(f"Sharded checkpoint saved to {ckpt_dir}")
+    
+    def save(self):
+        ckpt_dir = os.path.join(self.output_path, f"checkpoint_model_{self.step:06d}")
+        os.makedirs(ckpt_dir, exist_ok=True)
+
+        fsdp = self.model.generator
+        with FSDP.state_dict_type(fsdp, StateDictType.LOCAL_STATE_DICT):
+            gen_sd = fsdp.state_dict()
+
+        state_dict = {"generator": gen_sd}
+        if self.generator_ema is not None and self.config.ema_start_step < self.step:
+            state_dict["generator_ema"] = self.generator_ema.state_dict()
+
+        pg = fsdp.process_group
+        if isinstance(pg, tuple):
+            shard_pg, replica_pg = pg
+        else:
+            shard_pg, replica_pg = pg, None
+        
+        assert replica_pg is not None, "HYBRID_SHARD saving requires a replica process group"
+
+        ok_to_save = True
+        if replica_pg is not None:
+            replica_rank = dist.get_rank(replica_pg)
+            ok_to_save = (replica_rank == 0)
+
+        if ok_to_save:
+            writer = dist_cp.FileSystemWriter(ckpt_dir)
+            dist_cp.save(
+                state_dict=state_dict,
+                storage_writer=writer,
+                process_group=shard_pg,
+            )
+
+        if self.is_main_process:
+            print(f"HYBRID_SHARD checkpoint saved (shard_group only) to {ckpt_dir}")
 
     def train_one_step(self, batch):
         self.log_iters = 1
@@ -393,28 +453,23 @@ class Trainer:
 
     @contextmanager
     def use_generator_ema(self):
-        """Temporarily load EMA weights into the FSDP-wrapped generator."""
         if self.generator_ema is None:
-            # EMA not active yet
             yield False
             return
 
-        # Backup current (non-EMA) params on CPU
         backup = {}
-        with FSDP.summon_full_params(self.model.generator, writeback=False):
-            for n, p in self.model.generator.module.named_parameters():
-                backup[n] = p.detach().clone().cpu()
+        gen_module = getattr(self.model.generator, "module", self.model.generator)
+        for name, p in gen_module.named_parameters():
+            backup[name] = p.detach().clone().cpu()
 
-        # Load EMA params into the live generator
         self.generator_ema.copy_to(self.model.generator)
 
         try:
             yield True
         finally:
-            # Restore training params
-            with FSDP.summon_full_params(self.model.generator, writeback=True):
-                for n, p in self.model.generator.module.named_parameters():
-                    p.data.copy_(backup[n].to(device=p.device, dtype=p.dtype))
+            gen_module = getattr(self.model.generator, "module", self.model.generator)
+            for name, p in gen_module.named_parameters():
+                p.data.copy_(backup[name].to(device=p.device, dtype=p.dtype))
 
     def run_validation(self, label="validation_videos", prompts=None, samples=1, upload=True, broadcast=False, filename_fn=None):
         with torch.no_grad():

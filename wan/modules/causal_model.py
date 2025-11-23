@@ -846,6 +846,7 @@ class CausalWanSelfAttention(nn.Module):
             # if it is teacher forcing training?
             is_tf = (s == seq_lens[0].item() * 2)
             if is_tf:
+                assert False, "teacher forcing unsupported for now"
                 q_chunk = torch.chunk(q, 2, dim=1)
                 k_chunk = torch.chunk(k, 2, dim=1)
                 roped_query = []
@@ -891,32 +892,56 @@ class CausalWanSelfAttention(nn.Module):
                 roped_query = rope_apply(q, grid_sizes, freqs).type_as(v)
                 roped_key = rope_apply(k, grid_sizes, freqs).type_as(v)
 
-                padded_length = math.ceil(q.shape[1] / 128) * 128 - q.shape[1]
-                padded_roped_query = torch.cat(
-                    [roped_query,
-                     torch.zeros([q.shape[0], padded_length, q.shape[2], q.shape[3]],
-                                 device=q.device, dtype=v.dtype)],
-                    dim=1
-                )
+                if self.disable_monarch:
+                    padded_length = math.ceil(q.shape[1] / 128) * 128 - q.shape[1]
+                    padded_roped_query = torch.cat(
+                        [roped_query,
+                        torch.zeros([q.shape[0], padded_length, q.shape[2], q.shape[3]],
+                                    device=q.device, dtype=v.dtype)],
+                        dim=1
+                    )
 
-                padded_roped_key = torch.cat(
-                    [roped_key, torch.zeros([k.shape[0], padded_length, k.shape[2], k.shape[3]],
-                                            device=k.device, dtype=v.dtype)],
-                    dim=1
-                )
+                    padded_roped_key = torch.cat(
+                        [roped_key, torch.zeros([k.shape[0], padded_length, k.shape[2], k.shape[3]],
+                                                device=k.device, dtype=v.dtype)],
+                        dim=1
+                    )
 
-                padded_v = torch.cat(
-                    [v, torch.zeros([v.shape[0], padded_length, v.shape[2], v.shape[3]],
-                                    device=v.device, dtype=v.dtype)],
-                    dim=1
-                )
+                    padded_v = torch.cat(
+                        [v, torch.zeros([v.shape[0], padded_length, v.shape[2], v.shape[3]],
+                                        device=v.device, dtype=v.dtype)],
+                        dim=1
+                    )
 
-                x = flex_attention(
-                    query=padded_roped_query.transpose(2, 1),
-                    key=padded_roped_key.transpose(2, 1),
-                    value=padded_v.transpose(2, 1),
-                    block_mask=block_mask
-                )[:, :, :-padded_length].transpose(2, 1)
+                    x = flex_attention(
+                        query=padded_roped_query.transpose(2, 1),
+                        key=padded_roped_key.transpose(2, 1),
+                        value=padded_v.transpose(2, 1),
+                        block_mask=block_mask
+                    )[:, :, :-padded_length].transpose(2, 1)
+                else:
+                    b, _, h, d = roped_query.shape
+                    assert self.target_sparsity == 0.65
+                    h1, w1 = grid_sizes[0, 1].item(), grid_sizes[0, 2].item()
+                    block_b1, block_b2 = self.get_block_sizes(h1, w1, 4680, roped_key.size(1))
+                    f_per_set, block_b1 = block_b1
+                    def rearrange_fn(x):
+                        x = x.view(b, -1, f_per_set, h1 // block_b1, block_b1, w1 // block_b2, block_b2, h, d)
+                        return rearrange(x, 'b a f c i e j h d -> b (a c e) (f i) j h d')
+                    def return_fn(x):
+                        return rearrange(x, 'b (a c e) (f i) j h d -> b (a f c i e j) h d', c=h1 // block_b1, e=w1 // block_b2, f=f_per_set)
+                    out = []
+                    for i in range(0, roped_query.size(1), 4680):
+                        curr_q = roped_query[:, i:i+4680]
+                        curr_k = roped_key[:, :i+4680]
+                        curr_v = v[:, :i+4680]
+
+                        curr_q = rearrange_fn(curr_q)
+                        curr_k = rearrange_fn(curr_k)
+                        curr_v = rearrange_fn(curr_v)
+                        x = return_fn(monarch_attn(curr_q, curr_k, curr_v, d ** -0.5, self.num_iters, self.eps))
+                        out.append(x)
+                    x = torch.cat(out, dim=1)
         else:
             frame_seqlen = math.prod(grid_sizes[0][1:]).item()
             current_start_frame = current_start // frame_seqlen

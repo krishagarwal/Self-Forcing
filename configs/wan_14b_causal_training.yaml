@@ -18,7 +18,7 @@ wandb_project: self_forcing
 sharding_strategy: hybrid_full
 lr: 1.0e-05
 lr_critic: 2.0e-06
-beta1: 0.0
+beta1: 0.9
 beta2: 0.999
 beta1_critic: 0.0
 beta2_critic: 0.999

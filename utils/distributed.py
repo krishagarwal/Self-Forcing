@@ -95,31 +95,33 @@ class EMA_FSDP:
         self._init_shadow(fsdp_module)
 
     @torch.no_grad()
-    def _init_shadow(self, fsdp_module):
-        from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-        with FSDP.summon_full_params(fsdp_module, writeback=False):
-            for n, p in fsdp_module.module.named_parameters():
-                self.shadow[n] = p.detach().clone().float().cpu()
+    def _init_shadow(self, fsdp_module: torch.nn.Module):
+        module = getattr(fsdp_module, "module", fsdp_module)
+        for name, p in module.named_parameters():
+            self.shadow[name] = p.detach().clone().float().cpu()
 
     @torch.no_grad()
     def update(self, fsdp_module):
         d = self.decay
-        from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-        with FSDP.summon_full_params(fsdp_module, writeback=False):
-            for n, p in fsdp_module.module.named_parameters():
-                self.shadow[n].mul_(d).add_(p.detach().float().cpu(), alpha=1. - d)
+        module = getattr(fsdp_module, "module", fsdp_module)
+        for name, p in module.named_parameters():
+            if name not in self.shadow:
+                self.shadow[name] = p.detach().clone().float().cpu()
+            else:
+                shadow_p = self.shadow[name]
+                shadow_p.mul_(d).add_(p.detach().float().cpu(), alpha=1.0 - d)
 
     # Optional helpers ---------------------------------------------------
     def state_dict(self):
-        return self.shadow            # picklable
+        return {k: v.clone() for k, v in self.shadow.items()}
 
     def load_state_dict(self, sd):
         self.shadow = {k: v.clone() for k, v in sd.items()}
 
+    @torch.no_grad()
     def copy_to(self, fsdp_module):
-        # load EMA weights into an (unwrapped) copy of the generator
-        from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-        with FSDP.summon_full_params(fsdp_module, writeback=True):
-            for n, p in fsdp_module.module.named_parameters():
-                if n in self.shadow:
-                    p.data.copy_(self.shadow[n].to(dtype=p.dtype, device=p.device))
+        module = getattr(fsdp_module, "module", fsdp_module)
+        for name, p in module.named_parameters():
+            if name not in self.shadow:
+                continue
+            p.data.copy_(self.shadow[name].to(device=p.device, dtype=p.dtype))
