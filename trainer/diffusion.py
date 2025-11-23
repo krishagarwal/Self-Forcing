@@ -20,6 +20,8 @@ from torchvision.io import write_video
 from pipeline import CausalInferencePipeline, CausalDiffusionInferencePipeline, BidirectionalInferencePipeline, BidirectionalDiffusionInferencePipeline
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 
+from safetensors.torch import load_file
+
 class Trainer:
     def __init__(self, config):
         self.config = config
@@ -144,12 +146,22 @@ class Trainer:
         # 7. (If resuming) Load the model and optimizer, lr_scheduler, ema's statedicts
         if checkpoint_path is not None:
             print(f"Loading pretrained generator from {checkpoint_path}")
-            if checkpoint_path.endswith(".safetensors"):
-                from safetensors.torch import load_file
-                state_dict = load_file(config.generator_ckpt, device="cpu")
-                state_dict = {f"model.{k}" : v for k, v in state_dict.items()}
+            if os.path.isdir(checkpoint_path):
+                shard_paths = sorted(glob.glob(os.path.join(checkpoint_path, "*.safetensors")))
+                if not shard_paths:
+                    raise ValueError(
+                        f"Checkpoint directory {checkpoint_path} contains no .safetensors files."
+                    )
+                state_dict = {}
+                for shard_path in shard_paths:
+                    print(f"  Loading shard: {os.path.basename(shard_path)}")
+                    shard_state = load_file(shard_path, device="cpu")
+                    state_dict.update(shard_state)
+            elif checkpoint_path.endswith(".safetensors"):
+                state_dict = load_file(checkpoint_path, device="cpu")
             else:
                 state_dict = torch.load(checkpoint_path, map_location="cpu")
+
             # if "generator_ema" in state_dict and self.generator_ema is not None:
             #     self.generator_ema.load_state_dict(
             #         state_dict["generator_ema"], strict=True
