@@ -15,10 +15,10 @@ import wandb
 import time
 import os
 
-from utils.distributed import EMA_FSDP, barrier, fsdp_wrap, fsdp_state_dict, launch_distributed_job
+from utils.distributed import EMA_FSDP, barrier, fsdp_wrap, fsdp_local_state_dict, launch_distributed_job
 from torchvision.io import write_video
 from pipeline import CausalInferencePipeline, CausalDiffusionInferencePipeline, BidirectionalInferencePipeline, BidirectionalDiffusionInferencePipeline
-from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, StateDictType
+from torch.distributed.fsdp import ShardingStrategy
 import torch.distributed.checkpoint as dist_cp
 
 from safetensors.torch import load_file
@@ -43,6 +43,7 @@ class Trainer:
         self.is_main_process = self.global_rank == 0
         self.causal = config.causal
         self.disable_wandb = config.disable_wandb
+        self.is_test = getattr(config, "is_test", False)
 
         # use a random seed for the training
         if config.seed == 0:
@@ -184,7 +185,7 @@ class Trainer:
         ##############################################################################################################
 
         # Let's delete EMA params for early steps to save some computes at training and inference
-        if self.step < config.ema_start_step:
+        if not self.is_test and self.step < config.ema_start_step:
             self.generator_ema = None
 
         self.max_grad_norm = 10.0
@@ -299,65 +300,51 @@ class Trainer:
     #                    f"checkpoint_model_{self.step:06d}", "model.pt"))
     #         print("Model saved to", os.path.join(self.output_path,
     #               f"checkpoint_model_{self.step:06d}", "model.pt"))
-    
-    # def save(self):
-    #     ckpt_dir = os.path.join(self.output_path, f"checkpoint_model_{self.step:06d}")
-    #     os.makedirs(ckpt_dir, exist_ok=True)
 
-    #     with FSDP.state_dict_type(
-    #         self.model.generator,
-    #         StateDictType.LOCAL_STATE_DICT,
-    #     ):
-    #         generator_state_dict = self.model.generator.state_dict()
-
-    #     state_dict = {"generator": generator_state_dict}
-    #     if self.config.ema_start_step < self.step:
-    #         state_dict["generator_ema"] = self.generator_ema.state_dict()
-
-    #     writer = dist_cp.FileSystemWriter(ckpt_dir)
-    #     dist_cp.save(
-    #         state_dict=state_dict,
-    #         storage_writer=writer,
-    #     )
-
-    #     if self.is_main_process:
-    #         print(f"Sharded checkpoint saved to {ckpt_dir}")
-    
     def save(self):
+        generator_fsdp = self.model.generator  # FSDP-wrapped module
+        generator_state = fsdp_local_state_dict(generator_fsdp)
+        if self.generator_ema is not None:
+            ema_state = self.generator_ema.state_dict()
+        else:
+            ema_state = None
+        state_dict = {"generator": generator_state}
+        if ema_state is not None:
+            state_dict["generator_ema"] = ema_state
+
         ckpt_dir = os.path.join(self.output_path, f"checkpoint_model_{self.step:06d}")
         os.makedirs(ckpt_dir, exist_ok=True)
 
-        fsdp = self.model.generator
-        with FSDP.state_dict_type(fsdp, StateDictType.LOCAL_STATE_DICT):
-            gen_sd = fsdp.state_dict()
+        sharding_strategy = getattr(generator_fsdp, "sharding_strategy", None)
+        is_hybrid = sharding_strategy == ShardingStrategy.HYBRID_SHARD
 
-        state_dict = {"generator": gen_sd}
-        if self.generator_ema is not None and self.config.ema_start_step < self.step:
-            state_dict["generator_ema"] = self.generator_ema.state_dict()
+        if not dist.is_initialized():
+            dist_cp.save(state_dict=state_dict, checkpoint_id=ckpt_dir)
+            if self.is_main_process:
+                print("Saved (non-distributed) checkpoint to", ckpt_dir)
+            return
 
-        pg = fsdp.process_group
-        if isinstance(pg, tuple):
-            shard_pg, replica_pg = pg
-        else:
-            shard_pg, replica_pg = pg, None
-        
-        assert replica_pg is not None, "HYBRID_SHARD saving requires a replica process group"
-
-        ok_to_save = True
-        if replica_pg is not None:
-            replica_rank = dist.get_rank(replica_pg)
-            ok_to_save = (replica_rank == 0)
-
-        if ok_to_save:
-            writer = dist_cp.FileSystemWriter(ckpt_dir)
+        rank = dist.get_rank()
+        if is_hybrid:
+            shard_pg = generator_fsdp.process_group
+            shard_ranks = dist.get_process_group_ranks(shard_pg)
+            is_primary_shard_group = 0 in shard_ranks
+            if not is_primary_shard_group:
+                return
+            print(f"[rank {rank}] Saving HYBRID_SHARD checkpoint via DCP to {ckpt_dir}")
             dist_cp.save(
                 state_dict=state_dict,
-                storage_writer=writer,
+                checkpoint_id=ckpt_dir,
                 process_group=shard_pg,
             )
-
+        else:
+            print(f"[rank {rank}] Saving checkpoint via DCP to {ckpt_dir}")
+            dist_cp.save(
+                state_dict=state_dict,
+                checkpoint_id=ckpt_dir,
+            )
         if self.is_main_process:
-            print(f"HYBRID_SHARD checkpoint saved (shard_group only) to {ckpt_dir}")
+            print("Checkpoint saved (sharded) at", ckpt_dir)
 
     def train_one_step(self, batch):
         self.log_iters = 1
@@ -585,17 +572,18 @@ class Trainer:
         start_step = self.step
 
         while self.step <= 1000 and not self.inference_only:
-            if self.step % 100 == 0 and not (self.disable_wandb or self.val_prompts is None):
+            if self.step % 100 == 0 and not (self.disable_wandb or self.val_prompts is None or self.is_test):
                 self.run_validation()
                 if self.generator_ema is not None:
                     with self.use_generator_ema():
                         self.run_validation("validation_videos_ema")
-
-            batch = next(self.dataloader)
-            self.train_one_step(batch)
-            if (not self.config.no_save) and (self.step - start_step) > 0 and self.step % self.config.log_iters == 0:
+            
+            if not self.is_test:
+                batch = next(self.dataloader)
+                self.train_one_step(batch)
+            if self.is_test or ((not self.config.no_save) and (self.step - start_step) > 0 and self.step % self.config.log_iters == 0):
                 torch.cuda.empty_cache()
-                if self.step == 1000:
+                if self.is_test or self.step == 1000:
                     self.save()
                     torch.cuda.empty_cache()
 
@@ -608,6 +596,9 @@ class Trainer:
                     if not self.disable_wandb:
                         wandb.log({"per iteration time": current_time - self.previous_time}, step=self.step)
                     self.previous_time = current_time
+            
+            if self.is_test:
+                break
 
         if self.benchmark_prompts is not None:
             if self.generator_ema is not None:

@@ -3,7 +3,7 @@ from functools import partial
 import os
 import torch
 import torch.distributed as dist
-from torch.distributed.fsdp import FullStateDictConfig, FullyShardedDataParallel as FSDP, MixedPrecision, ShardingStrategy, StateDictType
+from torch.distributed.fsdp import FullStateDictConfig, FullyShardedDataParallel as FSDP, MixedPrecision, ShardingStrategy, StateDictType, LocalStateDictConfig
 from torch.distributed.fsdp.api import CPUOffload
 from torch.distributed.fsdp.wrap import size_based_auto_wrap_policy, transformer_auto_wrap_policy
 
@@ -19,6 +19,11 @@ def fsdp_state_dict(model):
 
     return checkpoint
 
+def fsdp_local_state_dict(fsdp_module: torch.nn.Module):
+    """Return a LOCAL_STATE_DICT for an FSDP-wrapped module (no full all-gather)."""
+    cfg = LocalStateDictConfig()  # defaults are fine; tweak if needed
+    with FSDP.state_dict_type(fsdp_module, StateDictType.LOCAL_STATE_DICT, cfg):
+        return fsdp_module.state_dict()
 
 def fsdp_wrap(module, sharding_strategy="full", mixed_precision=False, wrap_strategy="size", min_num_params=int(5e7), transformer_module=None, cpu_offload=False):
     if mixed_precision:

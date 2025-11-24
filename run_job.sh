@@ -109,5 +109,6 @@
 # kubectl apply -f yaml/run_self_forcing_topk.yaml
 # kubectl apply -f yaml/run_self_forcing_radial_attn.yaml
 
+kubectl apply -f yaml/run_wan_14b_causal_test.yaml
 kubectl apply -f yaml/run_wan_14b_causal.yaml
-# kubectl apply -f yaml/run_wan_14b_causal_monarch.yaml
+kubectl apply -f yaml/run_wan_14b_causal_monarch.yaml
