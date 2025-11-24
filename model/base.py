@@ -31,7 +31,9 @@ class BaseModel(nn.Module):
         self.generator = WanDiffusionWrapper(**getattr(args, "model_kwargs", {}), is_causal=True)
         self.generator.model.requires_grad_(True)
 
-        with patch.dict(os.environ, {"DISABLE_MONARCH_ATTN": "1"}, clear=False):
+        patch_dict = {"DISABLE_MONARCH_ATTN": "1"} if not getattr(args, "use_monarch_base", False) else {}
+
+        with patch.dict(os.environ, patch_dict, clear=False):
             self.real_score = WanDiffusionWrapper(model_name=self.real_model_name, is_causal=False)
             self.real_score.model.requires_grad_(False)
 

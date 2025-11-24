@@ -20,7 +20,6 @@ def fsdp_state_dict(model):
     return checkpoint
 
 def fsdp_local_state_dict(fsdp_module: torch.nn.Module):
-    """Return a LOCAL_STATE_DICT for an FSDP-wrapped module (no full all-gather)."""
     cfg = LocalStateDictConfig()  # defaults are fine; tweak if needed
     with FSDP.state_dict_type(fsdp_module, StateDictType.LOCAL_STATE_DICT, cfg):
         return fsdp_module.state_dict()

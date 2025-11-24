@@ -303,14 +303,6 @@ class Trainer:
 
     def save(self):
         generator_fsdp = self.model.generator  # FSDP-wrapped module
-        generator_state = fsdp_local_state_dict(generator_fsdp)
-        if self.generator_ema is not None:
-            ema_state = self.generator_ema.state_dict()
-        else:
-            ema_state = None
-        state_dict = {"generator": generator_state}
-        if ema_state is not None:
-            state_dict["generator_ema"] = ema_state
 
         ckpt_dir = os.path.join(self.output_path, f"checkpoint_model_{self.step:06d}")
         os.makedirs(ckpt_dir, exist_ok=True)
@@ -319,6 +311,15 @@ class Trainer:
         is_hybrid = sharding_strategy == ShardingStrategy.HYBRID_SHARD
 
         if not dist.is_initialized():
+            generator_state = fsdp_local_state_dict(generator_fsdp)
+            if self.generator_ema is not None:
+                ema_state = self.generator_ema.state_dict()
+            else:
+                ema_state = None
+            state_dict = {"generator": generator_state}
+            if ema_state is not None:
+                state_dict["generator_ema"] = ema_state
+
             dist_cp.save(state_dict=state_dict, checkpoint_id=ckpt_dir)
             if self.is_main_process:
                 print("Saved (non-distributed) checkpoint to", ckpt_dir)
@@ -331,6 +332,15 @@ class Trainer:
             is_primary_shard_group = 0 in shard_ranks
             if not is_primary_shard_group:
                 return
+            generator_state = fsdp_local_state_dict(generator_fsdp)
+            if self.generator_ema is not None:
+                ema_state = self.generator_ema.state_dict()
+            else:
+                ema_state = None
+            state_dict = {"generator": generator_state}
+            if ema_state is not None:
+                state_dict["generator_ema"] = ema_state
+
             print(f"[rank {rank}] Saving HYBRID_SHARD checkpoint via DCP to {ckpt_dir}")
             dist_cp.save(
                 state_dict=state_dict,
@@ -338,6 +348,15 @@ class Trainer:
                 process_group=shard_pg,
             )
         else:
+            generator_state = fsdp_local_state_dict(generator_fsdp)
+            if self.generator_ema is not None:
+                ema_state = self.generator_ema.state_dict()
+            else:
+                ema_state = None
+            state_dict = {"generator": generator_state}
+            if ema_state is not None:
+                state_dict["generator_ema"] = ema_state
+
             print(f"[rank {rank}] Saving checkpoint via DCP to {ckpt_dir}")
             dist_cp.save(
                 state_dict=state_dict,
