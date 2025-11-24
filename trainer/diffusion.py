@@ -584,20 +584,20 @@ class Trainer:
     def train(self):
         start_step = self.step
 
-        while self.step <= 2 and not self.inference_only:
-            # if self.step % 100 == 0 and not (self.disable_wandb or self.val_prompts is None):
-            #     self.run_validation()
-            #     if self.generator_ema is not None:
-            #         with self.use_generator_ema():
-            #             self.run_validation("validation_videos_ema")
+        while self.step <= 1000 and not self.inference_only:
+            if self.step % 100 == 0 and not (self.disable_wandb or self.val_prompts is None):
+                self.run_validation()
+                if self.generator_ema is not None:
+                    with self.use_generator_ema():
+                        self.run_validation("validation_videos_ema")
 
             batch = next(self.dataloader)
             self.train_one_step(batch)
-            if True:#(not self.config.no_save) and (self.step - start_step) > 0 and self.step % self.config.log_iters == 0:
+            if (not self.config.no_save) and (self.step - start_step) > 0 and self.step % self.config.log_iters == 0:
                 torch.cuda.empty_cache()
-                # if self.step == 1000:
-                self.save()
-                torch.cuda.empty_cache()
+                if self.step == 1000:
+                    self.save()
+                    torch.cuda.empty_cache()
 
             barrier()
             if self.is_main_process:
