@@ -238,4 +238,4 @@ spec:
             - name: dshm
               emptyDir: 
                 medium: Memory
-                sizeLimit: 512Gi
+                sizeLimit: 500Gi
