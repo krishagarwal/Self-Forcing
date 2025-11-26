@@ -21,7 +21,11 @@ import time
 import os
 from torchvision.io import write_video
 from pipeline import CausalInferencePipeline, CausalDiffusionInferencePipeline, BidirectionalInferencePipeline, BidirectionalDiffusionInferencePipeline
-from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, ShardingStrategy
+import torch.distributed.checkpoint as dist_cp
+from torch.distributed.checkpoint.state_dict import get_model_state_dict, StateDictOptions
+
+from safetensors.torch import load_file
 
 class Trainer:
     def __init__(self, config):
@@ -181,12 +185,24 @@ class Trainer:
         # 7. (If resuming) Load the model and optimizer, lr_scheduler, ema's statedicts
         if checkpoint_path is not None:
             print(f"Loading pretrained generator from {checkpoint_path}")
-            if checkpoint_path.endswith(".safetensors"):
-                from safetensors.torch import load_file
-                state_dict = load_file(config.generator_ckpt, device="cpu")
+            if os.path.isdir(checkpoint_path):
+                shard_paths = sorted(glob.glob(os.path.join(checkpoint_path, "*.safetensors")))
+                if not shard_paths:
+                    raise ValueError(
+                        f"Checkpoint directory {checkpoint_path} contains no .safetensors files."
+                    )
+                state_dict = {}
+                for shard_path in shard_paths:
+                    print(f"  Loading shard: {os.path.basename(shard_path)}")
+                    shard_state = load_file(shard_path, device="cpu")
+                    state_dict.update(shard_state)
+                state_dict = {f"model.{k}" : v for k, v in state_dict.items()}
+            elif checkpoint_path.endswith(".safetensors"):
+                state_dict = load_file(checkpoint_path, device="cpu")
                 state_dict = {f"model.{k}" : v for k, v in state_dict.items()}
             else:
                 state_dict = torch.load(checkpoint_path, map_location="cpu")
+
             # if "generator_ema" in state_dict and self.generator_ema is not None:
             #     self.generator_ema.load_state_dict(
             #         state_dict["generator_ema"], strict=True
@@ -231,7 +247,7 @@ class Trainer:
         else:
             self.val_prompts = None
         
-        if config.benchmark_prompts_file is not None:
+        if hasattr(config, 'benchmark_prompts_file') and config.benchmark_prompts_file is not None:
             with open(config.benchmark_prompts_file, "r") as f:
                 all_prompts = [line.strip() for line in f.readlines()]
             self.benchmark_prompts = all_prompts
@@ -306,32 +322,68 @@ class Trainer:
 
         return obj
 
-    def save(self):
-        print("Start gathering distributed model states...")
-        generator_state_dict = fsdp_state_dict(
-            self.model.generator)
-        critic_state_dict = fsdp_state_dict(
-            self.model.fake_score)
+    # def save(self):
+    #     print("Start gathering distributed model states...")
+    #     generator_state_dict = fsdp_state_dict(
+    #         self.model.generator)
+    #     critic_state_dict = fsdp_state_dict(
+    #         self.model.fake_score)
 
-        if self.config.ema_start_step < self.step:
-            state_dict = {
-                "generator": generator_state_dict,
-                "critic": critic_state_dict,
-                "generator_ema": self.generator_ema.state_dict(),
-            }
+    #     if self.config.ema_start_step < self.step:
+    #         state_dict = {
+    #             "generator": generator_state_dict,
+    #             "critic": critic_state_dict,
+    #             "generator_ema": self.generator_ema.state_dict(),
+    #         }
+    #     else:
+    #         state_dict = {
+    #             "generator": generator_state_dict,
+    #             "critic": critic_state_dict,
+    #         }
+
+    #     if self.is_main_process:
+    #         os.makedirs(os.path.join(self.output_path,
+    #                     f"checkpoint_model_{self.step:06d}"), exist_ok=True)
+    #         torch.save(state_dict, os.path.join(self.output_path,
+    #                    f"checkpoint_model_{self.step:06d}", "model.pt"))
+    #         print("Model saved to", os.path.join(self.output_path,
+    #               f"checkpoint_model_{self.step:06d}", "model.pt"))
+
+    def save(self):
+        ckpt_dir = os.path.join(self.output_path, f"checkpoint_model_{self.step:06d}")
+        os.makedirs(ckpt_dir, exist_ok=True)
+
+        def _get_state_dict():
+            opts = StateDictOptions(full_state_dict=False)
+            gen_state = get_model_state_dict(self.model.generator, options=opts)
+            critic_state = get_model_state_dict(self.model.fake_score, options=opts)
+            state = {"generator": gen_state, "critic": critic_state}
+            if self.generator_ema is not None:
+                state["generator_ema"] = self.generator_ema.state_dict()
+
+        sharding_strategy = getattr(self.model.generator, "sharding_strategy", None)
+        is_hybrid = sharding_strategy == ShardingStrategy.HYBRID_SHARD
+
+        if is_hybrid:
+            shard_pg = self.model.generator.process_group
+            shard_ranks = dist.get_process_group_ranks(shard_pg)
+            is_primary_shard_group = 0 in shard_ranks
+            if not is_primary_shard_group:
+                return
+            state = _get_state_dict()
+            print(f"[rank {self.global_rank}] Saving HYBRID_SHARD checkpoint via DCP to {ckpt_dir}")
+            dist_cp.save(
+                state_dict=state,
+                checkpoint_id=ckpt_dir,
+                process_group=shard_pg,
+            )
         else:
-            state_dict = {
-                "generator": generator_state_dict,
-                "critic": critic_state_dict,
-            }
+            print(f"[rank {self.global_rank}] Saving checkpoint via DCP to {ckpt_dir}")
+            state = _get_state_dict()
+            dist_cp.save(state_dict=state, checkpoint_id=ckpt_dir)
 
         if self.is_main_process:
-            os.makedirs(os.path.join(self.output_path,
-                        f"checkpoint_model_{self.step:06d}"), exist_ok=True)
-            torch.save(state_dict, os.path.join(self.output_path,
-                       f"checkpoint_model_{self.step:06d}", "model.pt"))
-            print("Model saved to", os.path.join(self.output_path,
-                  f"checkpoint_model_{self.step:06d}", "model.pt"))
+            print(f"[DCP] Saved sharded generator checkpoint to {ckpt_dir}")
 
     def fwdbwd_one_step(self, batch, train_generator):
         self.model.eval()  # prevent any randomness (e.g. dropout)
