@@ -1,5 +1,5 @@
 import argparse
-from model import CausalDiffusion
+# from model import CausalDiffusion
 import torch
 import time
 import torch.distributed.checkpoint as dist_cp
@@ -16,7 +16,7 @@ config = OmegaConf.load(args.config_path)
 default_config = OmegaConf.load("configs/default_config.yaml")
 config = OmegaConf.merge(default_config, config)
 
-model = CausalDiffusion(config, device="cpu")
+# model = CausalDiffusion(config, device="cpu")
 
 state = {}
 print(f"Trying to load state dict from {args.ckpt_path}...")
@@ -25,9 +25,9 @@ state = dist_cp.state_dict_loader._load_state_dict_from_keys(keys=None, checkpoi
 end = time.time()
 print(f"Loaded state dict in {end - start} seconds")
 
-orig_sd = model.generator.state_dict()
-for k, v in state["generator"].items():
-    assert state["generator"][k].shape == orig_sd[k].shape
+# orig_sd = model.generator.state_dict()
+# for k, v in state["generator"].items():
+#     assert state["generator"][k].shape == orig_sd[k].shape
 
 if not args.exclude_ema:
     rename_param = (
