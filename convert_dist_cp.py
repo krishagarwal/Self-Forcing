@@ -38,8 +38,8 @@ if not args.exclude_ema:
     for k, v in state["generator_ema"].items():
         assert v.shape == orig_sd[rename_param(k)].shape, f"Shape mismatch for {k}: {v.shape} vs {orig_sd[rename_param(k)].shape}"
         assert torch.all(v == state["generator"][rename_param(k)]), f"Value mismatch for {k}"
-else:
-    del state["generator_ema"]
+# else:
+#    del state["generator_ema"]
 
 torch.save(state, args.output_path)
 print(f"Saved converted checkpoint to {args.output_path}")
