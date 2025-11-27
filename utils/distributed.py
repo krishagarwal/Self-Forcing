@@ -95,37 +95,28 @@ def launch_distributed_job(backend: str = "nccl"):
 class EMA_FSDP:
     def __init__(self, fsdp_module: torch.nn.Module, decay: float = 0.999):
         self.decay = decay
-        self.shadow = {}
-        self._init_shadow(fsdp_module)
-
-    @torch.no_grad()
-    def _init_shadow(self, fsdp_module: torch.nn.Module):
-        module = getattr(fsdp_module, "module", fsdp_module)
-        for name, p in module.named_parameters():
-            self.shadow[name] = p.detach().clone().float().cpu()
+        self.ema_model = fsdp_module
 
     @torch.no_grad()
     def update(self, fsdp_module):
         d = self.decay
-        module = getattr(fsdp_module, "module", fsdp_module)
-        for name, p in module.named_parameters():
-            if name not in self.shadow:
-                self.shadow[name] = p.detach().clone().float().cpu()
-            else:
-                shadow_p = self.shadow[name]
-                shadow_p.mul_(d).add_(p.detach().float().cpu(), alpha=1.0 - d)
+        for (n, p), (_, ema_p) in zip(
+            fsdp_module.named_parameters(),
+            self.ema_model.named_parameters()
+        ):
+            ema_p.data.mul_(d).add_(p.data, alpha=1.0 - d)
 
-    # Optional helpers ---------------------------------------------------
-    def state_dict(self):
-        return {k: v.clone() for k, v in self.shadow.items()}
+    # # Optional helpers ---------------------------------------------------
+    # def state_dict(self):
+    #     return {k: v.clone() for k, v in self.shadow.items()}
 
-    def load_state_dict(self, sd):
-        self.shadow = {k: v.clone() for k, v in sd.items()}
+    # def load_state_dict(self, sd):
+    #     self.shadow = {k: v.clone() for k, v in sd.items()}
 
-    @torch.no_grad()
-    def copy_to(self, fsdp_module):
-        module = getattr(fsdp_module, "module", fsdp_module)
-        for name, p in module.named_parameters():
-            if name not in self.shadow:
-                continue
-            p.data.copy_(self.shadow[name].to(device=p.device, dtype=p.dtype))
+    # @torch.no_grad()
+    # def copy_to(self, fsdp_module):
+    #     module = getattr(fsdp_module, "module", fsdp_module)
+    #     for name, p in module.named_parameters():
+    #         if name not in self.shadow:
+    #             continue
+    #         p.data.copy_(self.shadow[name].to(device=p.device, dtype=p.dtype))

@@ -1,4 +1,5 @@
 from contextlib import contextmanager
+import copy
 import gc
 import glob
 import logging
@@ -7,7 +8,7 @@ import numpy as np
 
 from utils.dataset import ShardingLMDBDataset, cycle
 from utils.dataset import TextDataset
-from utils.distributed import EMA_FSDP, barrier, fsdp_wrap, fsdp_state_dict, launch_distributed_job
+from utils.distributed import EMA_FSDP, barrier, fsdp_wrap, launch_distributed_job
 from utils.misc import (
     set_seed,
     merge_dict_list
@@ -21,8 +22,9 @@ import time
 import os
 from torchvision.io import write_video
 from pipeline import CausalInferencePipeline, CausalDiffusionInferencePipeline, BidirectionalInferencePipeline, BidirectionalDiffusionInferencePipeline
-from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, ShardingStrategy
+from torch.distributed.fsdp import ShardingStrategy
 import torch.distributed.checkpoint as dist_cp
+from torch.distributed.checkpoint.format_utils import dcp_to_torch_save
 from torch.distributed.checkpoint.state_dict import get_model_state_dict, StateDictOptions
 
 from safetensors.torch import load_file
@@ -83,6 +85,19 @@ class Trainer:
 
         # Save pretrained model state_dicts to CPU
         self.fake_score_state_dict_cpu = self.model.fake_score.state_dict()
+
+        ema_weight = config.ema_weight
+        self.generator_ema = None
+        if (ema_weight is not None) and (ema_weight > 0.0):
+            print(f"Setting up EMA with weight {ema_weight}")
+            ema_model = copy.deepcopy(self.model.generator)
+            ema_model = fsdp_wrap(
+                ema_model,
+                sharding_strategy=config.sharding_strategy,
+                mixed_precision=config.mixed_precision,
+                wrap_strategy=config.generator_fsdp_wrap_strategy
+            ) # requires same exact FSDP config as generator
+            self.generator_ema = EMA_FSDP(ema_model, decay=ema_weight)
 
         self.model.generator = fsdp_wrap(
             self.model.generator,
@@ -164,11 +179,6 @@ class Trainer:
 
             renamed_n = rename_param(n)
             self.name_to_trainable_params[renamed_n] = p
-        ema_weight = config.ema_weight
-        self.generator_ema = None
-        if (ema_weight is not None) and (ema_weight > 0.0):
-            print(f"Setting up EMA with weight {ema_weight}")
-            self.generator_ema = EMA_FSDP(self.model.generator, decay=ema_weight)
 
         checkpoint_folders = glob.glob(os.path.join(self.output_path, "checkpoint_model_*"))
         if False:#len(checkpoint_folders) > 0:
@@ -183,6 +193,12 @@ class Trainer:
 
         ##############################################################################################################
         # 7. (If resuming) Load the model and optimizer, lr_scheduler, ema's statedicts
+        if hasattr(config, "convert_dist_cp") and config.convert_dist_cp is not None and not os.path.exists(checkpoint_path):
+            if self.is_main_process:
+                print(f"Converting DCP checkpoint from {config.convert_dist_cp}...")
+                dcp_to_torch_save(config.convert_dist_cp, checkpoint_path)
+            barrier()
+
         if checkpoint_path is not None:
             print(f"Loading pretrained generator from {checkpoint_path}")
             if os.path.isdir(checkpoint_path):
@@ -225,9 +241,10 @@ class Trainer:
 
         ##############################################################################################################
 
+        # TODO: disabling this for now
         # Let's delete EMA params for early steps to save some computes at training and inference
-        if self.step < config.ema_start_step:
-            self.generator_ema = None
+        # if self.step < config.ema_start_step:
+        #     self.generator_ema = None
 
         self.max_grad_norm_generator = getattr(config, "max_grad_norm_generator", 10.0)
         self.max_grad_norm_critic = getattr(config, "max_grad_norm_critic", 10.0)
@@ -359,7 +376,7 @@ class Trainer:
             critic_state = get_model_state_dict(self.model.fake_score, options=opts)
             state = {"generator": gen_state, "critic": critic_state}
             if self.generator_ema is not None:
-                state["generator_ema"] = self.generator_ema.state_dict()
+                state["generator_ema"] = get_model_state_dict(self.generator_ema.ema_model, options=opts)
             return state
 
         sharding_strategy = getattr(self.model.generator, "sharding_strategy", None)
@@ -497,14 +514,17 @@ class Trainer:
             yield False
             return
 
-        # Backup current (non-EMA) params on CPU
-        backup = {}
-        with FSDP.summon_full_params(self.model.generator, writeback=False):
-            for n, p in self.model.generator.module.named_parameters():
-                backup[n] = p.detach().clone().cpu()
+        backup = self.model.generator
+        self.model.generator = self.generator_ema.ema_model
 
-        # Load EMA params into the live generator
-        self.generator_ema.copy_to(self.model.generator)
+        # Backup current (non-EMA) params on CPU
+        # backup = {}
+        # with FSDP.summon_full_params(self.model.generator, writeback=False):
+        #     for n, p in self.model.generator.module.named_parameters():
+        #         backup[n] = p.detach().clone().cpu()
+
+        # # Load EMA params into the live generator
+        # self.generator_ema.copy_to(self.model.generator)
 
         try:
             yield True
