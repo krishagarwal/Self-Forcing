@@ -530,9 +530,10 @@ class Trainer:
             yield True
         finally:
             # Restore training params
-            with FSDP.summon_full_params(self.model.generator, writeback=True):
-                for n, p in self.model.generator.module.named_parameters():
-                    p.data.copy_(backup[n].to(device=p.device, dtype=p.dtype))
+            # with FSDP.summon_full_params(self.model.generator, writeback=True):
+            #     for n, p in self.model.generator.module.named_parameters():
+            #         p.data.copy_(backup[n].to(device=p.device, dtype=p.dtype))
+            self.model.generator = backup
 
     def run_validation(self, label="validation_videos", prompts=None, samples=1, upload=True, broadcast=False, filename_fn=None):
         with torch.no_grad():
@@ -680,10 +681,11 @@ class Trainer:
             # Increment the step since we finished gradient update
             self.step += 1
 
+            # TODO: disabling this for now, should already be instantiated during init
             # Create EMA params (if not already created)
-            if (self.step >= self.config.ema_start_step) and \
-                    (self.generator_ema is None) and (self.config.ema_weight > 0):
-                self.generator_ema = EMA_FSDP(self.model.generator, decay=self.config.ema_weight)
+            # if (self.step >= self.config.ema_start_step) and \
+            #         (self.generator_ema is None) and (self.config.ema_weight > 0):
+            #     self.generator_ema = EMA_FSDP(self.model.generator, decay=self.config.ema_weight)
 
             # Save the model
             if (not self.config.no_save) and (self.step - start_step) > 0 and self.step % self.config.log_iters == 0:
