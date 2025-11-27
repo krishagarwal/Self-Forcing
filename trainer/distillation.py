@@ -360,6 +360,7 @@ class Trainer:
             state = {"generator": gen_state, "critic": critic_state}
             if self.generator_ema is not None:
                 state["generator_ema"] = self.generator_ema.state_dict()
+            return state
 
         sharding_strategy = getattr(self.model.generator, "sharding_strategy", None)
         is_hybrid = sharding_strategy == ShardingStrategy.HYBRID_SHARD

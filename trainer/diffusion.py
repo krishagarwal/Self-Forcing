@@ -1,4 +1,5 @@
 from contextlib import contextmanager
+import copy
 import gc
 import glob
 import logging
@@ -15,11 +16,12 @@ import wandb
 import time
 import os
 
-from utils.distributed import EMA_FSDP, barrier, fsdp_wrap, fsdp_local_state_dict, launch_distributed_job
+from utils.distributed import EMA_FSDP, barrier, fsdp_wrap, launch_distributed_job
 from torchvision.io import write_video
 from pipeline import CausalInferencePipeline, CausalDiffusionInferencePipeline, BidirectionalInferencePipeline, BidirectionalDiffusionInferencePipeline
 from torch.distributed.fsdp import ShardingStrategy
 import torch.distributed.checkpoint as dist_cp
+from torch.distributed.checkpoint.state_dict import get_model_state_dict, StateDictOptions
 
 from safetensors.torch import load_file
 
@@ -70,6 +72,20 @@ class Trainer:
 
         # Step 2: Initialize the model and optimizer
         self.model = CausalDiffusion(config, device=self.device)
+
+        ema_weight = config.ema_weight
+        self.generator_ema = None
+        if (ema_weight is not None) and (ema_weight > 0.0):
+            print(f"Setting up EMA with weight {ema_weight}")
+            ema_model = copy.deepcopy(self.model.generator)
+            ema_model = fsdp_wrap(
+                ema_model,
+                sharding_strategy=config.sharding_strategy,
+                mixed_precision=config.mixed_precision,
+                wrap_strategy=config.generator_fsdp_wrap_strategy
+            ) # requires same exact FSDP config as generator
+            self.generator_ema = EMA_FSDP(ema_model, decay=ema_weight)
+
         self.model.generator = fsdp_wrap(
             self.model.generator,
             sharding_strategy=config.sharding_strategy,
@@ -127,11 +143,6 @@ class Trainer:
 
             renamed_n = rename_param(n)
             self.name_to_trainable_params[renamed_n] = p
-        ema_weight = config.ema_weight
-        self.generator_ema = None
-        if (ema_weight is not None) and (ema_weight > 0.0):
-            print(f"Setting up EMA with weight {ema_weight}")
-            self.generator_ema = EMA_FSDP(self.model.generator, decay=ema_weight)
 
         checkpoint_folders = glob.glob(os.path.join(self.output_path, "checkpoint_model_*"))
         if False:#len(checkpoint_folders) > 0:
@@ -184,9 +195,10 @@ class Trainer:
 
         ##############################################################################################################
 
+        # TODO: disabling this for now
         # Let's delete EMA params for early steps to save some computes at training and inference
-        if not self.is_test and self.step < config.ema_start_step:
-            self.generator_ema = None
+        # if self.step < config.ema_start_step:
+        #     self.generator_ema = None
 
         self.max_grad_norm = 10.0
         self.previous_time = None
@@ -301,57 +313,93 @@ class Trainer:
     #         print("Model saved to", os.path.join(self.output_path,
     #               f"checkpoint_model_{self.step:06d}", "model.pt"))
 
-    def save(self):
-        def _get_state_dict():
-            generator_state = fsdp_local_state_dict(generator_fsdp)
-            if self.generator_ema is not None:
-                ema_state = self.generator_ema.state_dict()
-            else:
-                ema_state = None
-            state_dict = {"generator": generator_state}
-            if ema_state is not None:
-                state_dict["generator_ema"] = ema_state
-            return state_dict
+    # def save(self):
+    #     def _get_state_dict():
+    #         generator_state = fsdp_local_state_dict(generator_fsdp)
+    #         if self.generator_ema is not None:
+    #             ema_state = self.generator_ema.state_dict()
+    #         else:
+    #             ema_state = None
+    #         state_dict = {"generator": generator_state}
+    #         if ema_state is not None:
+    #             state_dict["generator_ema"] = ema_state
+    #         return state_dict
     
-        generator_fsdp = self.model.generator  # FSDP-wrapped module
+    #     generator_fsdp = self.model.generator  # FSDP-wrapped module
 
+    #     ckpt_dir = os.path.join(self.output_path, f"checkpoint_model_{self.step:06d}")
+    #     os.makedirs(ckpt_dir, exist_ok=True)
+
+    #     sharding_strategy = getattr(generator_fsdp, "sharding_strategy", None)
+    #     is_hybrid = sharding_strategy == ShardingStrategy.HYBRID_SHARD
+
+    #     if not dist.is_initialized():
+    #         state_dict = _get_state_dict()
+    #         dist_cp.save(state_dict=state_dict, checkpoint_id=ckpt_dir)
+    #         if self.is_main_process:
+    #             print("Saved (non-distributed) checkpoint to", ckpt_dir)
+    #         return
+
+    #     rank = dist.get_rank()
+    #     if is_hybrid:
+    #         shard_pg = generator_fsdp.process_group
+    #         shard_ranks = dist.get_process_group_ranks(shard_pg)
+    #         is_primary_shard_group = 0 in shard_ranks
+    #         if not is_primary_shard_group:
+    #             return
+    #         state_dict = _get_state_dict()
+
+    #         print(f"[rank {rank}] Saving HYBRID_SHARD checkpoint via DCP to {ckpt_dir}")
+    #         dist_cp.save(
+    #             state_dict=state_dict,
+    #             checkpoint_id=ckpt_dir,
+    #             process_group=shard_pg,
+    #         )
+    #     else:
+    #         state_dict = _get_state_dict()
+    #         print(f"[rank {rank}] Saving checkpoint via DCP to {ckpt_dir}")
+    #         dist_cp.save(
+    #             state_dict=state_dict,
+    #             checkpoint_id=ckpt_dir,
+    #         )
+    #     if self.is_main_process:
+    #         print("Checkpoint saved (sharded) at", ckpt_dir)
+    
+    def save(self):
         ckpt_dir = os.path.join(self.output_path, f"checkpoint_model_{self.step:06d}")
         os.makedirs(ckpt_dir, exist_ok=True)
 
-        sharding_strategy = getattr(generator_fsdp, "sharding_strategy", None)
+        def _get_state_dict():
+            opts = StateDictOptions(full_state_dict=False)
+            gen_state = get_model_state_dict(self.model.generator, options=opts)
+            state = {"generator": gen_state}
+            if self.generator_ema is not None:
+                state["generator_ema"] = get_model_state_dict(self.generator_ema.ema_model, options=opts)
+            return state
+
+        sharding_strategy = getattr(self.model.generator, "sharding_strategy", None)
         is_hybrid = sharding_strategy == ShardingStrategy.HYBRID_SHARD
 
-        if not dist.is_initialized():
-            state_dict = _get_state_dict()
-            dist_cp.save(state_dict=state_dict, checkpoint_id=ckpt_dir)
-            if self.is_main_process:
-                print("Saved (non-distributed) checkpoint to", ckpt_dir)
-            return
-
-        rank = dist.get_rank()
         if is_hybrid:
-            shard_pg = generator_fsdp.process_group
+            shard_pg = self.model.generator.process_group
             shard_ranks = dist.get_process_group_ranks(shard_pg)
             is_primary_shard_group = 0 in shard_ranks
             if not is_primary_shard_group:
                 return
-            state_dict = _get_state_dict()
-
-            print(f"[rank {rank}] Saving HYBRID_SHARD checkpoint via DCP to {ckpt_dir}")
+            state = _get_state_dict()
+            print(f"[rank {self.global_rank}] Saving HYBRID_SHARD checkpoint via DCP to {ckpt_dir}")
             dist_cp.save(
-                state_dict=state_dict,
+                state_dict=state,
                 checkpoint_id=ckpt_dir,
                 process_group=shard_pg,
             )
         else:
-            state_dict = _get_state_dict()
-            print(f"[rank {rank}] Saving checkpoint via DCP to {ckpt_dir}")
-            dist_cp.save(
-                state_dict=state_dict,
-                checkpoint_id=ckpt_dir,
-            )
+            print(f"[rank {self.global_rank}] Saving checkpoint via DCP to {ckpt_dir}")
+            state = _get_state_dict()
+            dist_cp.save(state_dict=state, checkpoint_id=ckpt_dir)
+
         if self.is_main_process:
-            print("Checkpoint saved (sharded) at", ckpt_dir)
+            print(f"[DCP] Saved sharded generator checkpoint to {ckpt_dir}")
 
     def train_one_step(self, batch):
         self.log_iters = 1
@@ -409,10 +457,11 @@ class Trainer:
         # Increment the step since we finished gradient update
         self.step += 1
 
-         # Create EMA params (if not already created)
-        if (self.step >= self.config.ema_start_step) and \
-                (self.generator_ema is None) and (self.config.ema_weight > 0):
-            self.generator_ema = EMA_FSDP(self.model.generator, decay=self.config.ema_weight)
+        # TODO: disabling this for now, should already be instantiated during init
+        # Create EMA params (if not already created)
+        # if (self.step >= self.config.ema_start_step) and \
+        #         (self.generator_ema is None) and (self.config.ema_weight > 0):
+        #     self.generator_ema = EMA_FSDP(self.model.generator, decay=self.config.ema_weight)
 
         wandb_loss_dict = {
             "generator_loss": generator_loss.item(),
@@ -450,20 +499,24 @@ class Trainer:
         if self.generator_ema is None:
             yield False
             return
+        
+        backup = self.model.generator
+        self.model.generator = self.generator_ema.ema_model
 
-        backup = {}
-        gen_module = getattr(self.model.generator, "module", self.model.generator)
-        for name, p in gen_module.named_parameters():
-            backup[name] = p.detach().clone().cpu()
+        # backup = {}
+        # gen_module = getattr(self.model.generator, "module", self.model.generator)
+        # for name, p in gen_module.named_parameters():
+        #     backup[name] = p.detach().clone().cpu()
 
-        self.generator_ema.copy_to(self.model.generator)
+        # self.generator_ema.copy_to(self.model.generator)
 
         try:
             yield True
         finally:
-            gen_module = getattr(self.model.generator, "module", self.model.generator)
-            for name, p in gen_module.named_parameters():
-                p.data.copy_(backup[name].to(device=p.device, dtype=p.dtype))
+            # gen_module = getattr(self.model.generator, "module", self.model.generator)
+            # for name, p in gen_module.named_parameters():
+            #     p.data.copy_(backup[name].to(device=p.device, dtype=p.dtype))
+            self.model.generator = backup
 
     def run_validation(self, label="validation_videos", prompts=None, samples=1, upload=True, broadcast=False, filename_fn=None):
         with torch.no_grad():
