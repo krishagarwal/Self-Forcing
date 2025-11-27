@@ -56,3 +56,4 @@ load_raw_video: false
 model_kwargs:
   timestep_shift: 5.0
 use_monarch_base: true
+convert_dist_cp: /checkpoints-fsx/beidchen-sandbox/self_forcing_logs/wan_14b_causal_monarch_fast_framewise/checkpoint_model_001000/
