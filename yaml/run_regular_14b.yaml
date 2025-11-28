@@ -175,13 +175,13 @@ spec:
           volumes:
             - name: fsx-claim-general--atl-2a1
               persistentVolumeClaim:
-                claimName: fsx-claim-general-a1
+                claimName: fsx-claim-general--atl-2a1
             - name: fsx-claim-general--atl-2a2
               persistentVolumeClaim:
-                claimName: fsx-claim-general-a4
+                claimName: fsx-claim-general--atl-2a2
             - name: fsx-claim-general--atl-2a3
               persistentVolumeClaim:
-                claimName: fsx-claim-general-a3
+                claimName: fsx-claim-general--atl-2a3
             - name: infiniband-efa-0
               hostPath:
                 path: /dev/infiniband/uverbs0
