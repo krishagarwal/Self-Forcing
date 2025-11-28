@@ -24,7 +24,7 @@ def fsdp_local_state_dict(fsdp_module: torch.nn.Module):
     with FSDP.state_dict_type(fsdp_module, StateDictType.LOCAL_STATE_DICT, cfg):
         return fsdp_module.state_dict()
 
-def fsdp_wrap(module, sharding_strategy="full", mixed_precision=False, wrap_strategy="size", min_num_params=int(5e7), transformer_module=None, cpu_offload=False):
+def fsdp_wrap(module, sharding_strategy="full", mixed_precision=False, wrap_strategy="size", min_num_params=int(5e7), transformer_module=None, cpu_offload=False, device_mesh=None):
     if mixed_precision:
         mixed_precision_policy = MixedPrecision(
             param_dtype=torch.bfloat16,
@@ -66,7 +66,8 @@ def fsdp_wrap(module, sharding_strategy="full", mixed_precision=False, wrap_stra
         limit_all_gathers=True,
         use_orig_params=True,
         cpu_offload=CPUOffload(offload_params=cpu_offload),
-        sync_module_states=False  # Load ckpt on rank 0 and sync to other ranks
+        sync_module_states=False,  # Load ckpt on rank 0 and sync to other ranks
+        device_mesh=device_mesh,
     )
     return module
 

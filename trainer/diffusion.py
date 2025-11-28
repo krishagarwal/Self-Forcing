@@ -22,6 +22,7 @@ from pipeline import CausalInferencePipeline, CausalDiffusionInferencePipeline, 
 from torch.distributed.fsdp import ShardingStrategy
 import torch.distributed.checkpoint as dist_cp
 from torch.distributed.checkpoint.state_dict import get_model_state_dict, StateDictOptions
+from torch.distributed.device_mesh import init_device_mesh
 
 from safetensors.torch import load_file
 
@@ -72,6 +73,7 @@ class Trainer:
 
         # Step 2: Initialize the model and optimizer
         self.model = CausalDiffusion(config, device=self.device)
+        device_mesh = init_device_mesh("cuda", (self.world_size,))
 
         ema_weight = config.ema_weight
         self.generator_ema = None
@@ -82,7 +84,8 @@ class Trainer:
                 ema_model,
                 sharding_strategy=config.sharding_strategy,
                 mixed_precision=config.mixed_precision,
-                wrap_strategy=config.generator_fsdp_wrap_strategy
+                wrap_strategy=config.generator_fsdp_wrap_strategy,
+                device_mesh=device_mesh,
             ) # requires same exact FSDP config as generator
             self.generator_ema = EMA_FSDP(ema_model, decay=ema_weight)
 
@@ -90,14 +93,16 @@ class Trainer:
             self.model.generator,
             sharding_strategy=config.sharding_strategy,
             mixed_precision=config.mixed_precision,
-            wrap_strategy=config.generator_fsdp_wrap_strategy
+            wrap_strategy=config.generator_fsdp_wrap_strategy,
+            device_mesh=device_mesh,
         )
 
         self.model.text_encoder = fsdp_wrap(
             self.model.text_encoder,
             sharding_strategy=config.sharding_strategy,
             mixed_precision=config.mixed_precision,
-            wrap_strategy=config.text_encoder_fsdp_wrap_strategy
+            wrap_strategy=config.text_encoder_fsdp_wrap_strategy,
+            device_mesh=device_mesh,
         )
 
         if not config.no_visualize or config.load_raw_video:
