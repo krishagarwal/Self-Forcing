@@ -73,7 +73,13 @@ class Trainer:
 
         # Step 2: Initialize the model and optimizer
         self.model = CausalDiffusion(config, device=self.device)
-        device_mesh = init_device_mesh("cuda", (self.world_size,))
+
+        local_world_size = int(os.environ["LOCAL_WORLD_SIZE"])
+        self.device_mesh = init_device_mesh(
+            "cuda",
+            (self.world_size // local_world_size, local_world_size),
+            mesh_dim_names=("replicate", "shard"),
+        )
 
         ema_weight = config.ema_weight
         self.generator_ema = None
@@ -85,7 +91,7 @@ class Trainer:
                 sharding_strategy=config.sharding_strategy,
                 mixed_precision=config.mixed_precision,
                 wrap_strategy=config.generator_fsdp_wrap_strategy,
-                device_mesh=device_mesh,
+                device_mesh=self.device_mesh,
             ) # requires same exact FSDP config as generator
             self.generator_ema = EMA_FSDP(ema_model, decay=ema_weight)
 
@@ -94,7 +100,7 @@ class Trainer:
             sharding_strategy=config.sharding_strategy,
             mixed_precision=config.mixed_precision,
             wrap_strategy=config.generator_fsdp_wrap_strategy,
-            device_mesh=device_mesh,
+            device_mesh=self.device_mesh,
         )
 
         self.model.text_encoder = fsdp_wrap(
@@ -102,7 +108,7 @@ class Trainer:
             sharding_strategy=config.sharding_strategy,
             mixed_precision=config.mixed_precision,
             wrap_strategy=config.text_encoder_fsdp_wrap_strategy,
-            device_mesh=device_mesh,
+            device_mesh=self.device_mesh,
         )
 
         if not config.no_visualize or config.load_raw_video:
@@ -386,7 +392,7 @@ class Trainer:
         is_hybrid = sharding_strategy == ShardingStrategy.HYBRID_SHARD
 
         if is_hybrid:
-            shard_pg = self.model.generator.process_group
+            shard_pg = self.device_mesh["shard"].get_group()
             shard_ranks = dist.get_process_group_ranks(shard_pg)
             is_primary_shard_group = 0 in shard_ranks
             if not is_primary_shard_group:
