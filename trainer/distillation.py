@@ -26,6 +26,7 @@ from torch.distributed.fsdp import ShardingStrategy
 import torch.distributed.checkpoint as dist_cp
 from torch.distributed.checkpoint.format_utils import dcp_to_torch_save
 from torch.distributed.checkpoint.state_dict import get_model_state_dict, StateDictOptions
+from torch.distributed.device_mesh import init_device_mesh
 
 from safetensors.torch import load_file
 
@@ -82,6 +83,13 @@ class Trainer:
             self.model = SiD(config, device=self.device)
         else:
             raise ValueError("Invalid distribution matching loss")
+        
+        local_world_size = int(os.environ["LOCAL_WORLD_SIZE"])
+        self.device_mesh = init_device_mesh(
+            "cuda",
+            (self.world_size // local_world_size, local_world_size),
+            mesh_dim_names=("replicate", "shard"),
+        )
 
         # Save pretrained model state_dicts to CPU
         self.fake_score_state_dict_cpu = self.model.fake_score.state_dict()
@@ -95,7 +103,8 @@ class Trainer:
                 ema_model,
                 sharding_strategy=config.sharding_strategy,
                 mixed_precision=config.mixed_precision,
-                wrap_strategy=config.generator_fsdp_wrap_strategy
+                wrap_strategy=config.generator_fsdp_wrap_strategy,
+                device_mesh=self.device_mesh,
             ) # requires same exact FSDP config as generator
             self.generator_ema = EMA_FSDP(ema_model, decay=ema_weight)
 
@@ -103,21 +112,24 @@ class Trainer:
             self.model.generator,
             sharding_strategy=config.sharding_strategy,
             mixed_precision=config.mixed_precision,
-            wrap_strategy=config.generator_fsdp_wrap_strategy
+            wrap_strategy=config.generator_fsdp_wrap_strategy,
+            device_mesh=self.device_mesh,
         )
 
         self.model.real_score = fsdp_wrap(
             self.model.real_score,
             sharding_strategy=config.sharding_strategy,
             mixed_precision=config.mixed_precision,
-            wrap_strategy=config.real_score_fsdp_wrap_strategy
+            wrap_strategy=config.real_score_fsdp_wrap_strategy,
+            device_mesh=self.device_mesh,
         )
 
         self.model.fake_score = fsdp_wrap(
             self.model.fake_score,
             sharding_strategy=config.sharding_strategy,
             mixed_precision=config.mixed_precision,
-            wrap_strategy=config.fake_score_fsdp_wrap_strategy
+            wrap_strategy=config.fake_score_fsdp_wrap_strategy,
+            device_mesh=self.device_mesh,
         )
 
         self.model.text_encoder = fsdp_wrap(
@@ -125,7 +137,8 @@ class Trainer:
             sharding_strategy=config.sharding_strategy,
             mixed_precision=config.mixed_precision,
             wrap_strategy=config.text_encoder_fsdp_wrap_strategy,
-            cpu_offload=getattr(config, "text_encoder_cpu_offload", False)
+            cpu_offload=getattr(config, "text_encoder_cpu_offload", False),
+            device_mesh=self.device_mesh,
         )
 
         if not config.no_visualize or config.load_raw_video:
@@ -383,7 +396,7 @@ class Trainer:
         is_hybrid = sharding_strategy == ShardingStrategy.HYBRID_SHARD
 
         if is_hybrid:
-            shard_pg = self.model.generator.process_group
+            shard_pg = self.device_mesh["shard"].get_group()
             shard_ranks = dist.get_process_group_ranks(shard_pg)
             is_primary_shard_group = 0 in shard_ranks
             if not is_primary_shard_group:
