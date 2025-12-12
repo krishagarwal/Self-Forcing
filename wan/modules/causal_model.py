@@ -8,9 +8,9 @@ from wan.modules.model import (
     MLPProj,
     sinusoidal_embedding_1d
 )
-# from torch.nn.attention.flex_attention import create_block_mask, flex_attention
+from torch.nn.attention.flex_attention import create_block_mask, flex_attention
 from diffusers.configuration_utils import ConfigMixin, register_to_config
-# from torch.nn.attention.flex_attention import BlockMask
+from torch.nn.attention.flex_attention import BlockMask
 from diffusers.models.modeling_utils import ModelMixin
 import torch.nn as nn
 import torch
@@ -18,10 +18,10 @@ import math
 import torch.distributed as dist
 from einops import rearrange
 import os
-# from .sparse_videogen.attention import sparse_attention, Wan_SparseAttn, prepare_flexattention, prepare_dense_attention
-# from .sparse_videogen.utils import get_attention_mask, sparsity_to_width
-# from .radial_attn.attn_mask import MaskMap, RadialAttention
-from .monarch_attn import monarch_video_attn
+from .sparse_videogen.attention import sparse_attention, Wan_SparseAttn, prepare_flexattention, prepare_dense_attention
+from .sparse_videogen.utils import get_attention_mask, sparsity_to_width
+from .radial_attn.attn_mask import MaskMap, RadialAttention
+from .monarch_attn import monarch_video_attn, get_rearrange_fns
 
 # class MonarchAttnImplicitFn(torch.autograd.Function):
 #     @staticmethod
@@ -644,8 +644,8 @@ monarch_attn = MonarchAttnImplicitFn.apply
 # wan 1.3B model has a weird channel / head configurations and require max-autotune to work with flexattention
 # see https://github.com/pytorch/pytorch/issues/133254
 # change to default for other models
-# flex_attention = torch.compile(
-#     flex_attention, dynamic=False, mode="max-autotune-no-cudagraphs")
+flex_attention = torch.compile(
+    flex_attention, dynamic=False, mode="max-autotune-no-cudagraphs")
 
 
 def causal_rope_apply(x, grid_sizes, freqs, start_frame=0):
@@ -897,13 +897,26 @@ class CausalWanSelfAttention(nn.Module):
                 q, grid_sizes, freqs, start_frame=current_start_frame).type_as(v)
             roped_key = causal_rope_apply(
                 k, grid_sizes, freqs, start_frame=current_start_frame).type_as(v)
+            
+            if not self.disable_monarch and not self.use_svg and not self.use_radial_attn:
+                # apply the needed permutation per block instead of always on the full kv
+                rearrange_fn, _ = get_rearrange_fns(
+                    roped_key,
+                    1 if self.use_framewise else 3,
+                    self.h_reduce,
+                    self.w_reduce,
+                    30,
+                    52,
+                )
+                roped_key = rearrange_fn(roped_key).view_as(roped_key)
+                v = rearrange_fn(v).view_as(v)
 
             current_end = current_start + roped_query.shape[1]
             sink_tokens = self.sink_size * frame_seqlen
             # If we are using local attention and the current KV cache size is larger than the local attention size, we need to truncate the KV cache
             kv_cache_size = kv_cache["k"].shape[1]
             num_new_tokens = roped_query.shape[1]
-            # ptr = kv_cache["k"].data_ptr()
+
             if self.local_attn_size != -1 and (current_end > kv_cache["global_end_index"].item()) and (
                     num_new_tokens + kv_cache["local_end_index"].item() > kv_cache_size):
                 # Calculate the number of new tokens added in this step
@@ -922,20 +935,11 @@ class CausalWanSelfAttention(nn.Module):
                 kv_cache["k"][:, local_start_index:local_end_index] = roped_key
                 kv_cache["v"][:, local_start_index:local_end_index] = v
             else:
-                # prev = kv_cache["k"].requires_grad
-                # curr = roped_key.requires_grad
-                # Assign new keys/values directly up to current_end
                 local_end_index = kv_cache["local_end_index"].item() + current_end - kv_cache["global_end_index"].item()
                 local_start_index = local_end_index - num_new_tokens
                 kv_cache["k"][:, local_start_index:local_end_index] = roped_key
                 kv_cache["v"][:, local_start_index:local_end_index] = v
-                # now = kv_cache["k"].requires_grad
-                # print("kv_cache_ptr", kv_cache["k"].data_ptr(), max(0, local_end_index - self.max_attention_size), local_start_index, local_end_index)
-                # if prev != now and dist.get_rank() == 0:
-                #     print(f"requires grad changed from {prev} to {now} (curr grad enabled is {curr}) global grad enabled is {torch.is_grad_enabled()}, kv_cache is at ptr {ptr} and now is at {kv_cache['k'].data_ptr()}")
-            # if kv_cache["k"].data_ptr() != ptr and dist.get_rank() == 0:
-            #     print("Warning: kv_cache has been reallocated, data_ptr changed from",
-            #           ptr, "to", kv_cache["k"].data_ptr())
+
             curr_k = kv_cache["k"][:, max(0, local_end_index - self.max_attention_size):local_end_index]
             curr_v = kv_cache["v"][:, max(0, local_end_index - self.max_attention_size):local_end_index]
             if (self.disable_monarch and not self.use_svg and not self.use_radial_attn) or (self.use_dense_init and curr_k.size(1) == (3 * grid_sizes[0, 1].item() * grid_sizes[0, 2].item())):
@@ -946,26 +950,6 @@ class CausalWanSelfAttention(nn.Module):
                     attn = torch.softmax(qk, dim=-1)
                     x = torch.einsum('bhij,bjhd->bihd', attn, curr_v)
                 else:
-                    # t = timestep.flatten()[0].item()
-                    # assert (timestep == t).all(), "All timesteps in the batch must be the same when using dense attention with kv cache"
-                    # if t == 1000 and self.block_num == 0 and curr_k.size(1) == 3 * 1560:
-                    #     qk = torch.einsum('bihd,bjhd->bhij', roped_query, curr_k) * (d ** -0.5)
-                    #     attn = torch.softmax(qk.to(torch.float32), dim=-1)
-                    #     sorted_values, _ = torch.sort(attn, dim=-1, descending=True)
-                    #     sorted_cumsum = torch.cumsum(sorted_values, dim=-1)
-                    #     for i, top_p in enumerate([0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95]):
-                    #         topk_mask = sorted_cumsum >= top_p
-                    #         has_any = topk_mask.any(dim=-1)
-                    #         first_idx = topk_mask.float().argmax(dim=-1)
-                    #         count = torch.where(has_any, first_idx + 1, torch.tensor(attn.size(-1), device=attn.device))
-                    #         frac = (count / attn.size(-1)).float().mean(dim=(0, 2))
-                    #         self.stats[i] += frac
-                    #     self.stats_iters += 1
-                    #     if curr_k.size(1) == 6 * 1560:
-                    #         torch.save([x / self.stats_iters for x in self.stats], f"stats/stats_block{self.block_num}.pt")
-                    #     qk = torch.einsum('bid,bjd->bij', roped_query[:, :, 0], curr_k[:, :, 0]) * (d ** -0.5)
-                    #     attn = torch.softmax(qk.to(torch.float32)[0], dim=-1)
-                    #     breakpoint()
                     x = attention(
                         roped_query,
                         curr_k,
@@ -1020,11 +1004,6 @@ class CausalWanSelfAttention(nn.Module):
                         frame_patches_one_frame,
                     )
                     Wan_SparseAttn.curr_seq_len = target_seq_len
-
-                # padded_q = torch.nn.functional.pad(
-                #     roped_query, (0, 0, 0, 0, curr_k.size(1) - roped_query.size(1), 0), value=0.0
-                # )
-                # assert padded_q.shape == curr_k.shape
                 
                 padded_q = torch.nn.functional.pad(
                     roped_query, (0, 0, 0, 0, curr_k.size(1) - roped_query.size(1), 21 * 30 * 52 - curr_k.size(1)), value=0.0
@@ -1039,9 +1018,6 @@ class CausalWanSelfAttention(nn.Module):
                 Wan_SparseAttn.sample_mse_min_row = curr_k.size(1) - roped_query.size(1)
                 Wan_SparseAttn.sample_mse_max_row = curr_k.size(1)
 
-                # padded_q = padded_q.transpose(1, 2).contiguous()
-                # curr_k = curr_k.transpose(1, 2).contiguous()
-                # curr_v = curr_v.transpose(1, 2).contiguous()
                 x = sparse_attention(
                     padded_q,
                     padded_k,
@@ -1049,22 +1025,9 @@ class CausalWanSelfAttention(nn.Module):
                     layer_idx=self.block_num,
                     timestep=timestep,
                 )
-                # x = x[:, -roped_query.size(1):, :, :]
                 x = x[:, curr_k.size(1) - roped_query.size(1) : curr_k.size(1), :, :]
                 assert x.shape == roped_query.shape
             elif self.use_radial_attn:
-                # self.mask_map = MaskMap(video_token_num=curr_k.size(1), num_frame=(curr_k.size(1) // (30 * 52)))
-                # padded_q = torch.nn.functional.pad(
-                #     roped_query, (0, 0, 0, 0, curr_k.size(1) - roped_query.size(1), 0), value=0.0
-                # )
-                # assert padded_q.shape == curr_k.shape
-                # x = RadialAttention(
-                #     padded_q, curr_k, curr_v, self.mask_map, sparsity_type="radial", block_size=1, decay_factor=0.0, model_type="wan", pre_defined_mask=None, use_sage_attention=False
-                # )
-                # x = rearrange(x, 'b s (h d) -> b s h d', d=d)
-                # x = x[:, -roped_query.size(1):, :, :]
-                # assert x.shape == roped_query.shape
-
                 if (timestep == 1000 or self.block_num < 1) and self.use_hacks:
                     x = attention(
                         roped_query,
@@ -1100,46 +1063,8 @@ class CausalWanSelfAttention(nn.Module):
                     self.w_reduce,
                     30,
                     52,
+                    skip_kv_rearrange=True,
                 )
-                # block_b1, block_b2 = self.get_block_sizes(grid_sizes[0, 1].item(), grid_sizes[0, 2].item(), q.size(1), curr_k.size(1))
-                # # block_b1 = grid_sizes[0, 1]
-                # # block_b2 = grid_sizes[0, 2]
-
-                # b, s, h, d = roped_query.shape
-                # h1, w1 = grid_sizes[0, 1].item(), grid_sizes[0, 2].item()
-                # if self.target_sparsity is None or self.target_sparsity == 0.95 or self.target_sparsity == 0.9:
-                #     def rearrange_fn(x):
-                #         return x.view(b, -1, block_b1, block_b2, h, d)
-                #     def return_fn(x):
-                #         return x.reshape(b, s, h, d)
-                # elif self.target_sparsity == 0.85:
-                #     def rearrange_fn(x):
-                #         x = x.view(b, -1, block_b1, w1 // block_b2, block_b2, h, d)
-                #         return rearrange(x, 'b a i c j h d -> b (a c) i j h d')
-                #     def return_fn(x):
-                #         return rearrange(x, 'b (a c) i j h d -> b (a i c j) h d', c=(w1 // block_b2))
-                # elif self.target_sparsity == 0.75:
-                #     f_per_set, block_b1 = block_b1
-                #     def rearrange_fn(x):
-                #         x = x.view(b, -1, f_per_set, h1 // block_b1, block_b1, block_b2, h, d)
-                #         return rearrange(x, 'b a f c i j h d -> b (a c) (f i) j h d')
-                #     def return_fn(x):
-                #         return rearrange(x, 'b (a c) (f i) j h d -> b (a f c i j) h d', c=h1 // block_b1, f=f_per_set)
-                # else:
-                #     f_per_set, block_b1 = block_b1
-                #     def rearrange_fn(x):
-                #         x = x.view(b, -1, f_per_set, h1 // block_b1, block_b1, w1 // block_b2, block_b2, h, d)
-                #         return rearrange(x, 'b a f c i e j h d -> b (a c e) (f i) j h d')
-                #     def return_fn(x):
-                #         return rearrange(x, 'b (a c e) (f i) j h d -> b (a f c i e j) h d', c=h1 // block_b1, e=w1 // block_b2, f=f_per_set)
-                # # curr_q = roped_query.view(b, -1, block_b1, block_b2, h, d)
-                # # curr_k = curr_k.view(b, -1, block_b1, block_b2, h, d)
-                # # curr_v = curr_v.view(b, -1, block_b1, block_b2, h, d)
-                # # x = monarch_attn(curr_q, curr_k, curr_v, d ** -0.5, self.num_iters, self.eps).reshape(b, s, h, d)
-                # curr_q = rearrange_fn(roped_query)
-                # curr_k = rearrange_fn(curr_k)
-                # curr_v = rearrange_fn(curr_v)
-                # x = return_fn(monarch_attn(curr_q, curr_k, curr_v, d ** -0.5, self.num_iters, self.eps))
 
             kv_cache["global_end_index"].fill_(current_end)
             kv_cache["local_end_index"].fill_(local_end_index)

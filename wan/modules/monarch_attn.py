@@ -108,6 +108,7 @@ def keep(conf):
 def _al_cl_fwd(Z, H, A, F,
               ar_ptr, cr_ptr, k_ptr,
               al_ptr, cl_ptr,
+              k_stride_z,
               eps, max_clamp,
               sm_scale_sqrt,
               block_b1: tl.constexpr,
@@ -128,7 +129,7 @@ def _al_cl_fwd(Z, H, A, F,
 
     off_zaf = (off_z * A + off_a) * F + off_f
     ZAF = Z * A * F
-    off_zfk = (off_z * F + off_f) * block_b1 + off_k
+    off_zfk = off_z * k_stride_z + off_f * block_b1 + off_k
     ZFK = Z * F * block_b1
 
     if IS_FIRST_ITER:
@@ -687,7 +688,7 @@ def keep(conf):
     return not (torch.cuda.get_device_capability()[0] == 9 and BLOCK_J * BLOCK_L < 128 * 128
                 and conf.num_warps == 8)
 
-# configs = [triton.Config({'BLOCK_J': 16, 'BLOCK_L': 32}, num_stages=3, num_warps=8, pre_hook=_al_cl_y_fwd_pre_hook)]
+# configs = [triton.Config({'BLOCK_J': 64, 'BLOCK_L': 64}, num_stages=2, num_warps=4, pre_hook=_al_cl_y_fwd_pre_hook)]
 
 @triton.autotune(configs=list(filter(keep, configs)), key=["block_b1", "block_b2", "HEAD_DIM", "IS_FIRST_ITER"], cache_results=True)
 @triton.jit
@@ -696,6 +697,7 @@ def _al_cl_y_fwd(Z, H, A, F,
                  k_ptr, v_ptr,
                  al_ptr, cl_ptr,
                  y_ptr, out_lse_ptr,
+                 kv_stride_z,
                  eps, max_clamp,
                  sm_scale_sqrt,
                  block_b1: tl.constexpr,
@@ -717,7 +719,7 @@ def _al_cl_y_fwd(Z, H, A, F,
 
     off_zaf = (off_z * A + off_a) * F + off_f
     ZAF = Z * A * F
-    off_zfk = (off_z * F + off_f) * block_b1 + off_k
+    off_zfk = off_z * kv_stride_z + off_f * block_b1 + off_k
     ZFK = Z * F * block_b1
 
     if IS_FIRST_ITER:
@@ -931,7 +933,7 @@ def keep(conf):
     return not (torch.cuda.get_device_capability()[0] == 9 and BLOCK_I * BLOCK_K < 128 * 128
                 and conf.num_warps == 8)
 
-# configs = [triton.Config({'BLOCK_I': 128, 'BLOCK_K': 32}, num_stages=2, num_warps=8, pre_hook=_z_fwd_pre_hook)]
+# configs = [triton.Config({'BLOCK_I': 64, 'BLOCK_K': 32}, num_stages=2, num_warps=4, pre_hook=_z_fwd_pre_hook)]
 @triton.autotune(configs=list(filter(keep, configs)), key=["block_b1", "block_b2", "HEAD_DIM", "OUTPUT_LSE"], cache_results=True)
 @triton.jit
 def _z_fwd(Z, H, A, F,
@@ -1136,6 +1138,7 @@ def _al_cl_y_bwd(Z, H, A, F,
                  lse_ptr, d_ptr,
                  dar_ptr, dcr_ptr,
                  dk_ptr, dv_ptr,
+                 kv_stride_z,
                  eps, max_clamp,
                  block_b1: tl.constexpr,
                  block_b2: tl.constexpr,
@@ -1192,7 +1195,7 @@ def _al_cl_y_bwd(Z, H, A, F,
     desc_k = tl.make_tensor_descriptor(
         k_ptr,
         shape=[Z, F, block_b1, block_b2, HD],
-        strides=[fklhd_stride, klhd_stride, lhd_stride, HD, 1],
+        strides=[kv_stride_z, klhd_stride, lhd_stride, HD, 1],
         block_shape=[1, 1, 1, BLOCK_L, HEAD_DIM]
     )
     desc_dk = tl.make_tensor_descriptor(
@@ -1204,7 +1207,7 @@ def _al_cl_y_bwd(Z, H, A, F,
     desc_v = tl.make_tensor_descriptor(
         v_ptr,
         shape=[Z, F, block_b1, block_b2, HD],
-        strides=[fklhd_stride, klhd_stride, lhd_stride, HD, 1],
+        strides=[kv_stride_z, klhd_stride, lhd_stride, HD, 1],
         block_shape=[1, 1, 1, BLOCK_L, HEAD_DIM]
     )
     desc_dv = tl.make_tensor_descriptor(
@@ -1767,6 +1770,7 @@ class MonarchAttnImplicitFn(torch.autograd.Function):
                 b, h, a, f,
                 al_cl_fwd_descs.aR, al_cl_fwd_descs.cR, al_cl_fwd_descs.k,
                 al_cl_fwd_descs.aL, cL,
+                k.stride(0),
                 eps, max_clamp,
                 sm_scale_sqrt,
                 block_b1,
@@ -1804,12 +1808,14 @@ class MonarchAttnImplicitFn(torch.autograd.Function):
             al_cl_y_lse = None
         y = torch.empty((b, a, f, block_b2, block_b1, h, d), device=q.device, dtype=q.dtype) # (b, a, f, j, k, h, d)
         al_cl_y_fwd_descs = _init_al_cl_y_fwd_descs(b, h, a, f, d, block_b1, block_b2, (num_iters == 1), aR, k, v, aL, y, cR)
+        assert k.stride(0) == v.stride(0), "current implementation assumes same batch stride for k and v"
         _al_cl_y_fwd[_al_cl_grid](
             b, h, a, f,
             al_cl_y_fwd_descs.aR, al_cl_y_fwd_descs.cR,
             al_cl_y_fwd_descs.k, al_cl_y_fwd_descs.v,
             al_cl_y_fwd_descs.aL, cL,
             al_cl_y_fwd_descs.y, al_cl_y_lse,
+            k.stride(0),
             eps, max_clamp,
             sm_scale_sqrt,
             block_b1,
@@ -1903,6 +1909,7 @@ class MonarchAttnImplicitFn(torch.autograd.Function):
 
         def grid(META):
             return (triton.cdiv(block_b2, META["BLOCK_L"]), b * h, f * block_b1)
+        assert k.stride(0) == v.stride(0), "current implementation assumes same batch stride for k and v"
         _al_cl_y_bwd[grid](
             b, h, a, f,
             aR, cR,
@@ -1911,6 +1918,7 @@ class MonarchAttnImplicitFn(torch.autograd.Function):
             al_cl_y_lse, aL_y_d,
             grad_aR, grad_cR,
             grad_k, grad_v,
+            k.stride(0),
             ctx.eps, ctx.max_clamp,
             block_b1,
             block_b2,
@@ -1921,18 +1929,28 @@ class MonarchAttnImplicitFn(torch.autograd.Function):
         grad_q = (grad_q + grad_aR.sum(2)).to(q.dtype)
         return grad_q, grad_k, grad_v
 
-def monarch_video_attn(q, k, v, f_tied, h_reduce, w_reduce, h, w):
-    b, _, nh, d = q.shape
+def get_rearrange_fns(x, f_tied, h_reduce, w_reduce, h, w):
+    b, _, nh, d = x.shape
     def rearrange_fn(x):
         x = x.view(b, -1, f_tied, h_reduce, h // h_reduce, w_reduce, w // w_reduce, nh, d)
         return rearrange(x, 'b a f c i e j h d -> b (a c e) (f i) j h d')
     def return_fn(x):
         return rearrange(x, 'b (a c e) (f i) j h d -> b (a f c i e j) h d', c=h_reduce, e=w_reduce, f=f_tied)
+    return rearrange_fn, return_fn
+
+def monarch_video_attn(q, k, v, f_tied, h_reduce, w_reduce, h, w, skip_kv_rearrange=False):
+    b, _, nh, d = q.shape
+    rearrange_fn, return_fn = get_rearrange_fns(q, f_tied, h_reduce, w_reduce, h, w)
     q = rearrange_fn(q)
-    k = rearrange_fn(k)
-    v = rearrange_fn(v)
+    if not skip_kv_rearrange:
+        k = rearrange_fn(k)
+        v = rearrange_fn(v)
+    else:
+        block_b1, block_b2 = q.shape[2], q.shape[3]
+        k = k.view(b, -1, block_b1, block_b2, nh, d)
+        v = v.view(b, -1, block_b1, block_b2, nh, d)
     z = MonarchAttnImplicitFn.apply(q, k, v, (d ** -0.5), 1, 1e-6, 1e4, torch.is_grad_enabled())
     z = return_fn(z)
     return z
 
-__all__ = ["monarch_video_attn"]
+__all__ = ["get_rearrange_fns", "monarch_video_attn"]

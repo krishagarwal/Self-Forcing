@@ -582,63 +582,6 @@ class WanSelfAttention(nn.Module):
                 30,
                 52,
             )
-            # h1, w1 = grid_sizes[0, 1].item(), grid_sizes[0, 2].item()
-            # block_b1, block_b2 = self.get_block_sizes(q.size(1), h1, w1)
-            # b, s, h, d = q.shape
-            # q = rope_apply(q, grid_sizes, freqs)
-            # k = rope_apply(k, grid_sizes, freqs)
-            # # q = q.view(b, -1, block_b1, block_b2, h, d)
-            # # k = k.view(b, -1, block_b1, block_b2, h, d)
-            # # v = v.view(b, -1, block_b1, block_b2, h, d)
-            # # x = monarch_attn(q, k, v, d ** -0.5, self.num_iters, self.eps).reshape(b, s, h, d)
-
-            # if self.target_sparsity is None or self.target_sparsity == 0.95:
-            #     def rearrange_fn(x):
-            #         return x.view(b, -1, block_b1, block_b2, h, d)
-            #     def return_fn(x):
-            #         return x.reshape(b, s, h, d)
-            # elif self.target_sparsity == 0.85:
-            #     # 3 frames per set of factors, reduced sparsity along w
-            #     def rearrange_fn(x):
-            #         x = x.view(b, -1, block_b1, w1 // block_b2, block_b2, h, d)
-            #         return rearrange(x, 'b a i c j h d -> b (a c) i j h d')
-            #     def return_fn(x):
-            #         return rearrange(x, 'b (a c) i j h d -> b (a i c j) h d', c=(w1 // block_b2))
-            # elif self.target_sparsity == 0.75:
-            #     f_per_set, block_b1 = block_b1
-            #     # 3 frames per set of factors, reduced sparsity along w
-            #     def rearrange_fn(x):
-            #         x = x.view(b, -1, f_per_set, h1 // block_b1, block_b1, block_b2, h, d)
-            #         return rearrange(x, 'b a f c i j h d -> b (a c) (f i) j h d')
-            #     def return_fn(x):
-            #         return rearrange(x, 'b (a c) (f i) j h d -> b (a f c i j) h d', c=h1 // block_b1, f=f_per_set)
-            # elif self.target_sparsity == 0.65:
-            #     f_per_set, block_b1, block_b2 = 3, h1 // 2, w1
-            #     def rearrange_fn(x):
-            #         x = x.view(b, -1, f_per_set, h1 // block_b1, block_b1, w1 // block_b2, block_b2, h, d)
-            #         return rearrange(x, 'b a f c i e j h d -> b (a c e) (f i) j h d')
-            #     def return_fn(x):
-            #         return rearrange(x, 'b (a c e) (f i) j h d -> b (a f c i e j) h d', c=h1 // block_b1, e=w1 // block_b2, f=f_per_set)
-            # elif self.target_sparsity == 0.55:
-            #     f_per_set, block_b1, block_b2 = 3, h1 // 6, w1 // 2
-            #     def rearrange_fn(x):
-            #         x = x.view(b, -1, f_per_set, h1 // block_b1, block_b1, w1 // block_b2, block_b2, h, d)
-            #         return rearrange(x, 'b a f c i e j h d -> b (a c e) (f i) j h d')
-            #     def return_fn(x):
-            #         return rearrange(x, 'b (a c e) (f i) j h d -> b (a f c i e j) h d', c=h1 // block_b1, e=w1 // block_b2, f=f_per_set)
-            # elif self.target_sparsity == 0.45:
-            #     f_per_set, block_b1, block_b2 = 3, h1, w1
-            #     def rearrange_fn(x):
-            #         x = x.view(b, -1, f_per_set, h1 // block_b1, block_b1, w1 // block_b2, block_b2, h, d)
-            #         return rearrange(x, 'b a f c i e j h d -> b (a c e) (f i) j h d')
-            #     def return_fn(x):
-            #         return rearrange(x, 'b (a c e) (f i) j h d -> b (a f c i e j) h d', c=h1 // block_b1, e=w1 // block_b2, f=f_per_set)
-
-            # q = rearrange_fn(q)
-            # k = rearrange_fn(k)
-            # v = rearrange_fn(v)
-
-            # x = return_fn(monarch_attn(q, k, v, d ** -0.5, self.num_iters, self.eps))
 
         # output
         x = x.flatten(2)
