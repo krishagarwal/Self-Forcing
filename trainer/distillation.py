@@ -114,6 +114,7 @@ class Trainer:
             mixed_precision=config.mixed_precision,
             wrap_strategy=config.generator_fsdp_wrap_strategy,
             device_mesh=self.device_mesh,
+            cpu_offload=getattr(config, "cpu_offload_all", False),
         )
 
         self.model.real_score = fsdp_wrap(
@@ -122,6 +123,7 @@ class Trainer:
             mixed_precision=config.mixed_precision,
             wrap_strategy=config.real_score_fsdp_wrap_strategy,
             device_mesh=self.device_mesh,
+            cpu_offload=getattr(config, "cpu_offload_all", False),
         )
 
         self.model.fake_score = fsdp_wrap(
@@ -130,6 +132,7 @@ class Trainer:
             mixed_precision=config.mixed_precision,
             wrap_strategy=config.fake_score_fsdp_wrap_strategy,
             device_mesh=self.device_mesh,
+            cpu_offload=getattr(config, "cpu_offload_all", False),
         )
 
         self.model.text_encoder = fsdp_wrap(
@@ -137,7 +140,7 @@ class Trainer:
             sharding_strategy=config.sharding_strategy,
             mixed_precision=config.mixed_precision,
             wrap_strategy=config.text_encoder_fsdp_wrap_strategy,
-            cpu_offload=getattr(config, "text_encoder_cpu_offload", False),
+            cpu_offload=getattr(config, "text_encoder_cpu_offload", False) or getattr(config, "cpu_offload_all", False),
             device_mesh=self.device_mesh,
         )
 

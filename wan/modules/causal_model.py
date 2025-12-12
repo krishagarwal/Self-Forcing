@@ -1,4 +1,5 @@
 from wan.modules.attention import attention
+from wan.modules.attn_patch import full_attention_with_kv_cache
 from wan.modules.model import (
     WanRMSNorm,
     rope_apply,
@@ -955,7 +956,6 @@ class CausalWanSelfAttention(nn.Module):
             # If we are using local attention and the current KV cache size is larger than the local attention size, we need to truncate the KV cache
             kv_cache_size = kv_cache["k"].shape[1]
             num_new_tokens = roped_query.shape[1]
-            # ptr = kv_cache["k"].data_ptr()
             if self.local_attn_size != -1 and (current_end > kv_cache["global_end_index"].item()) and (
                     num_new_tokens + kv_cache["local_end_index"].item() > kv_cache_size):
                 # Calculate the number of new tokens added in this step
@@ -971,40 +971,48 @@ class CausalWanSelfAttention(nn.Module):
                 local_end_index = kv_cache["local_end_index"].item() + current_end - \
                     kv_cache["global_end_index"].item() - num_evicted_tokens
                 local_start_index = local_end_index - num_new_tokens
-                kv_cache["k"][:, local_start_index:local_end_index] = roped_key
-                kv_cache["v"][:, local_start_index:local_end_index] = v
             else:
-                # prev = kv_cache["k"].requires_grad
-                # curr = roped_key.requires_grad
                 # Assign new keys/values directly up to current_end
                 local_end_index = kv_cache["local_end_index"].item() + current_end - kv_cache["global_end_index"].item()
                 local_start_index = local_end_index - num_new_tokens
-                kv_cache["k"][:, local_start_index:local_end_index] = roped_key
-                kv_cache["v"][:, local_start_index:local_end_index] = v
-                # now = kv_cache["k"].requires_grad
-                # print("kv_cache_ptr", kv_cache["k"].data_ptr(), max(0, local_end_index - self.max_attention_size), local_start_index, local_end_index)
-                # if prev != now and dist.get_rank() == 0:
-                #     print(f"requires grad changed from {prev} to {now} (curr grad enabled is {curr}) global grad enabled is {torch.is_grad_enabled()}, kv_cache is at ptr {ptr} and now is at {kv_cache['k'].data_ptr()}")
-            # if kv_cache["k"].data_ptr() != ptr and dist.get_rank() == 0:
-            #     print("Warning: kv_cache has been reallocated, data_ptr changed from",
-            #           ptr, "to", kv_cache["k"].data_ptr())
-            curr_k = kv_cache["k"][:, max(0, local_end_index - self.max_attention_size):local_end_index]
-            curr_v = kv_cache["v"][:, max(0, local_end_index - self.max_attention_size):local_end_index]
+            # kv_cache["k"][:, local_start_index:local_end_index] = roped_key
+            # kv_cache["v"][:, local_start_index:local_end_index] = v
+            
+            cache_start = max(0, local_end_index - self.max_attention_size)
+            curr_k = kv_cache["k"][:, cache_start:local_end_index]
+            curr_v = kv_cache["v"][:, cache_start:local_end_index]
+            local_start_index -= cache_start
+            local_end_index -= cache_start
+
             is_init = (self.use_dense_init and curr_k.size(1) == (3 * grid_sizes[0, 1].item() * grid_sizes[0, 2].item()))
             if (self.disable_monarch and not self.use_svg and not self.use_radial_attn) or is_init:
                 if not is_init and self.topk != 0.0:
+                    curr_k[:, local_start_index:local_end_index] = roped_key
+                    curr_v[:, local_start_index:local_end_index] = v
                     qk = torch.einsum('bihd,bjhd->bhij', roped_query, curr_k) * (d ** -0.5)
                     _, bottomk = qk.topk(dim=-1, k=int((1 - self.topk) * qk.size(-1)), largest=False)
                     qk.scatter_(-1, bottomk, -torch.inf)
                     attn = torch.softmax(qk, dim=-1)
                     x = torch.einsum('bhij,bjhd->bihd', attn, curr_v)
                 else:
-                    x = attention(
+                    x = full_attention_with_kv_cache(
                         roped_query,
                         curr_k,
-                        curr_v
+                        curr_v,
+                        roped_key,
+                        v,
+                        local_start_index,
+                        local_end_index,
+                        grad_only_new_kv=(kv_cache["k"].requires_grad or kv_cache["v"].requires_grad)
                     )
+                    # x = attention(
+                    #     roped_query,
+                    #     curr_k,
+                    #     curr_v
+                    # )
             elif self.use_svg:
+                curr_k[:, local_start_index:local_end_index] = roped_key
+                curr_v[:, local_start_index:local_end_index] = v
                 target_seq_len = 21 * 30 * 52 # curr_k.size(1)
                 if Wan_SparseAttn.curr_seq_len != target_seq_len:
                     sample_mse_max_row = 100000
@@ -1086,6 +1094,8 @@ class CausalWanSelfAttention(nn.Module):
                 x = x[:, curr_k.size(1) - roped_query.size(1) : curr_k.size(1), :, :]
                 assert x.shape == roped_query.shape
             elif self.use_radial_attn:
+                curr_k[:, local_start_index:local_end_index] = roped_key
+                curr_v[:, local_start_index:local_end_index] = v
                 # self.mask_map = MaskMap(video_token_num=curr_k.size(1), num_frame=(curr_k.size(1) // (30 * 52)))
                 # padded_q = torch.nn.functional.pad(
                 #     roped_query, (0, 0, 0, 0, curr_k.size(1) - roped_query.size(1), 0), value=0.0
@@ -1124,6 +1134,8 @@ class CausalWanSelfAttention(nn.Module):
                     x = x[:, curr_k.size(1) - roped_query.size(1) : curr_k.size(1), :, :]
                     assert x.shape == roped_query.shape
             else:
+                curr_k[:, local_start_index:local_end_index] = roped_key
+                curr_v[:, local_start_index:local_end_index] = v
                 block_b1, block_b2 = self.get_block_sizes(grid_sizes[0, 1].item(), grid_sizes[0, 2].item(), q.size(1), curr_k.size(1))
                 # block_b1 = grid_sizes[0, 1]
                 # block_b2 = grid_sizes[0, 2]
