@@ -358,7 +358,7 @@ class _attention(torch.autograd.Function):
         B, N_Q, H, D = q.shape
         _, N_KV, _, _ = k.shape
 
-        dq = torch.zeros((B, N_Q, H, D), device=q.device, dtype=q.dtype)
+        dq = torch.zeros((B, N_Q, H, D), device=q.device, dtype=torch.float32)
         if ctx.grad_only_new_kv:
             dk = torch.zeros((B, ctx.end_idx - ctx.start_idx, H, D), device=q.device, dtype=k.dtype)
             dv = torch.zeros((B, ctx.end_idx - ctx.start_idx, H, D), device=v.device, dtype=v.dtype)
@@ -411,7 +411,7 @@ class _attention(torch.autograd.Function):
             dk = dk_cache[:, ctx.start_idx:ctx.end_idx, :, :]
             dv = dv_cache[:, ctx.start_idx:ctx.end_idx, :, :]
 
-        return dq, dk_cache, dv_cache, dk, dv, None, None, None, None, None
+        return dq.to(torch.float32), dk_cache, dv_cache, dk, dv, None, None, None, None, None
 
 def full_attention_with_kv_cache(q, k_cache, v_cache, new_k, new_v, start_idx, end_idx, sm_scale=None, grad_only_new_kv=False):
     if sm_scale is None:
