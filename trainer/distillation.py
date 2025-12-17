@@ -105,6 +105,7 @@ class Trainer:
                 mixed_precision=config.mixed_precision,
                 wrap_strategy=config.generator_fsdp_wrap_strategy,
                 device_mesh=self.device_mesh,
+                cpu_offload=getattr(config, "cpu_offload_all", False),
             ) # requires same exact FSDP config as generator
             self.generator_ema = EMA_FSDP(ema_model, decay=ema_weight)
 
@@ -123,7 +124,7 @@ class Trainer:
             mixed_precision=config.mixed_precision,
             wrap_strategy=config.real_score_fsdp_wrap_strategy,
             device_mesh=self.device_mesh,
-            cpu_offload=getattr(config, "cpu_offload_all", False),
+            # cpu_offload=getattr(config, "cpu_offload_all", False),
         )
 
         self.model.fake_score = fsdp_wrap(
@@ -140,8 +141,8 @@ class Trainer:
             sharding_strategy=config.sharding_strategy,
             mixed_precision=config.mixed_precision,
             wrap_strategy=config.text_encoder_fsdp_wrap_strategy,
-            cpu_offload=getattr(config, "text_encoder_cpu_offload", False) or getattr(config, "cpu_offload_all", False),
             device_mesh=self.device_mesh,
+            # cpu_offload=getattr(config, "text_encoder_cpu_offload", False) or getattr(config, "cpu_offload_all", False),
         )
 
         if not config.no_visualize or config.load_raw_video:
