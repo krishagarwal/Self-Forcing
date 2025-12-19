@@ -1003,7 +1003,7 @@ class CausalWanSelfAttention(nn.Module):
                         v,
                         local_start_index,
                         local_end_index,
-                        grad_only_new_kv=(kv_cache["k"].requires_grad or kv_cache["v"].requires_grad)
+                        grad_only_new_kv=not (kv_cache["k"].requires_grad or kv_cache["v"].requires_grad)
                     )
                     # x = attention(
                     #     roped_query,

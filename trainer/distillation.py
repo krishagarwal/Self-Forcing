@@ -91,9 +91,6 @@ class Trainer:
             mesh_dim_names=("replicate", "shard"),
         )
 
-        # Save pretrained model state_dicts to CPU
-        self.fake_score_state_dict_cpu = self.model.fake_score.state_dict()
-
         ema_weight = config.ema_weight
         self.generator_ema = None
         if (ema_weight is not None) and (ema_weight > 0.0):
@@ -124,7 +121,7 @@ class Trainer:
             mixed_precision=config.mixed_precision,
             wrap_strategy=config.real_score_fsdp_wrap_strategy,
             device_mesh=self.device_mesh,
-            # cpu_offload=getattr(config, "cpu_offload_all", False),
+            cpu_offload=getattr(config, "cpu_offload_all", False),
         )
 
         self.model.fake_score = fsdp_wrap(
@@ -142,7 +139,7 @@ class Trainer:
             mixed_precision=config.mixed_precision,
             wrap_strategy=config.text_encoder_fsdp_wrap_strategy,
             device_mesh=self.device_mesh,
-            # cpu_offload=getattr(config, "text_encoder_cpu_offload", False) or getattr(config, "cpu_offload_all", False),
+            cpu_offload=getattr(config, "text_encoder_cpu_offload", False) or getattr(config, "cpu_offload_all", False),
         )
 
         if not config.no_visualize or config.load_raw_video:
@@ -189,13 +186,6 @@ class Trainer:
             .replace("_checkpoint_wrapped_module.", "")
             .replace("_orig_mod.", "")
         )
-        self.name_to_trainable_params = {}
-        for n, p in self.model.generator.named_parameters():
-            if not p.requires_grad:
-                continue
-
-            renamed_n = rename_param(n)
-            self.name_to_trainable_params[renamed_n] = p
 
         checkpoint_folders = glob.glob(os.path.join(self.output_path, "checkpoint_model_*"))
         if False:#len(checkpoint_folders) > 0:

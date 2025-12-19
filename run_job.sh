@@ -113,7 +113,7 @@
 # kubectl apply -f yaml/run_wan_14b_causal.yaml
 # kubectl apply -f yaml/run_wan_14b_causal_monarch.yaml
 
-# kubectl apply -f yaml/run_monarch_14b_from_monarch.yaml
-# kubectl apply -f yaml/run_monarch_14b_from_regular.yaml
 kubectl apply -f yaml/run_regular_14b.yaml
+kubectl apply -f yaml/run_monarch_14b_from_monarch.yaml
+kubectl apply -f yaml/run_monarch_14b_from_regular.yaml
 # kubectl apply -f yaml/run_regular_14b_test.yaml
