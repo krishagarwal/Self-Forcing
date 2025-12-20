@@ -36,7 +36,7 @@ spec:
                         values:
                           - p5en.48xlarge
           tolerations:
-            - key: mziyadi-lmsys
+            - key: ikiss-swe-skills-2
               operator: Equal
               value: "True"
               effect: NoSchedule
@@ -126,11 +126,11 @@ spec:
                   hugepages-2Mi: 5120Mi
                   vpc.amazonaws.com/efa: 16
                   nvidia.com/gpu: *gpus_per_node
-                  memory: "2000Gi"
+                  memory: 2000Gi
                 requests:
                   nvidia.com/gpu: *gpus_per_node
                   vpc.amazonaws.com/efa: 16
-                  memory: "2000Gi"
+                  memory: 2000Gi
                   ephemeral-storage: 32Gi
               volumeMounts:
                 - mountPath: /data-fsx
