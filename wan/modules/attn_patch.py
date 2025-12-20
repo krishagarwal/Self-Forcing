@@ -12,7 +12,7 @@ configs = [
     for BM in [64, 128]\
     for BN in [32, 64, 128]\
     for s in [2, 3, 4] \
-    for w in [4, 8]\
+    for w in [4]\
 ]
 
 @triton.autotune(configs=configs, key=["HEAD_DIM", "OUTPUT_LSE"])
@@ -113,7 +113,7 @@ configs = [
     triton.Config({'BLOCK_M': BM}, num_stages=s, num_warps=w) \
     for BM in [64, 128]\
     for s in [2, 3, 4] \
-    for w in [4, 8]\
+    for w in [4]\
 ]
 
 @triton.autotune(configs=configs, key=["HEAD_DIM"])
@@ -161,7 +161,7 @@ configs = [
     for BM in [64, 128]\
     for BN in [32, 64, 128]\
     for s in [2, 3, 4] \
-    for w in [4, 8]\
+    for w in [4]\
 ]
 
 @triton.autotune(configs=configs, key=["HEAD_DIM", "PARTIAL_KV_GRAD"], reset_to_zero=["DQ"])
