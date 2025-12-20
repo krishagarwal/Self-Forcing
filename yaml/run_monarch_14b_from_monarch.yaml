@@ -131,11 +131,11 @@ spec:
                   hugepages-2Mi: 5120Mi
                   vpc.amazonaws.com/efa: 16
                   nvidia.com/gpu: *gpus_per_node
-                  memory: 2000Gi
+                  memory: 1500Gi
                 requests:
                   nvidia.com/gpu: *gpus_per_node
                   vpc.amazonaws.com/efa: 16
-                  memory: 2000Gi
+                  memory: 1500Gi
                   ephemeral-storage: 32Gi
               volumeMounts:
                 - mountPath: /data-fsx
