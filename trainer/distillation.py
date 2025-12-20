@@ -658,7 +658,7 @@ class Trainer:
         while self.step <= 700 and not self.inference_only:
             if self.step % 100 == 0 and not (self.disable_wandb or self.val_prompts is None):
                 self.run_validation()
-                if self.generator_ema is not None:
+                if self.generator_ema is not None and self.step > self.config.ema_start_step:
                     with self.use_generator_ema():
                         self.run_validation("validation_videos_ema")
 
@@ -673,7 +673,7 @@ class Trainer:
                 extras_list.append(extra)
                 generator_log_dict = merge_dict_list(extras_list)
                 self.generator_optimizer.step()
-                if self.generator_ema is not None:
+                if self.generator_ema is not None and self.step >= self.config.ema_start_step:
                     self.generator_ema.update(self.model.generator)
 
             # Train the critic
@@ -690,9 +690,8 @@ class Trainer:
 
             # TODO: disabling this for now, should already be instantiated during init
             # Create EMA params (if not already created)
-            # if (self.step >= self.config.ema_start_step) and \
-            #         (self.generator_ema is None) and (self.config.ema_weight > 0):
-            #     self.generator_ema = EMA_FSDP(self.model.generator, decay=self.config.ema_weight)
+            if (self.step >= self.config.ema_start_step) and (self.generator_ema is not None):
+                self.generator_ema.copy_(self.model.generator)
 
             # Save the model
             if (not self.config.no_save) and (self.step - start_step) > 0 and self.step % self.config.log_iters == 0:
@@ -739,7 +738,7 @@ class Trainer:
                     self.previous_time = current_time
 
         if self.benchmark_prompts is not None:
-            if self.generator_ema is not None:
+            if self.generator_ema is not None and self.step > self.config.ema_start_step:
                 os.makedirs("/workspace/vbench_videos_ema", exist_ok=True)
                 with self.use_generator_ema():
                     filename_fn = lambda step, i, sample_num, prompt: f"/workspace/vbench_videos_ema/{prompt}-{sample_num}.mp4"

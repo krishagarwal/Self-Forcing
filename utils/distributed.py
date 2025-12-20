@@ -106,6 +106,14 @@ class EMA_FSDP:
             self.ema_model.named_parameters()
         ):
             ema_p.data.mul_(d).add_(p.data, alpha=1.0 - d)
+    
+    @torch.no_grad()
+    def copy_(self, fsdp_module):
+        for (n, p), (_, ema_p) in zip(
+            fsdp_module.named_parameters(),
+            self.ema_model.named_parameters()
+        ):
+            ema_p.data.copy_(p.data)
 
     # # Optional helpers ---------------------------------------------------
     # def state_dict(self):
