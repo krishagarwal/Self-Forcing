@@ -112,7 +112,7 @@ class Trainer:
             mixed_precision=config.mixed_precision,
             wrap_strategy=config.generator_fsdp_wrap_strategy,
             device_mesh=self.device_mesh,
-            # cpu_offload=getattr(config, "cpu_offload_all", False),
+            cpu_offload=getattr(config, "cpu_offload_all", False),
         )
 
         self.model.real_score = fsdp_wrap(
