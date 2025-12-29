@@ -36,7 +36,7 @@ spec:
                         values:
                           - p5en.48xlarge
           tolerations:
-            - key: mziyadi-lmsys
+            - key: ikiss-swe-skills-2
               operator: Equal
               value: "True"
               effect: NoSchedule
@@ -116,7 +116,6 @@ spec:
                   mkdir -p /checkpoints-fsx/beidchen-sandbox/self_forcing_logs/dmd_monarch_fast_framewise_14b_from_monarch &&
                   export DISABLE_MONARCH_ATTN=0 &&
                   export MONARCH_ATTN_FRAMEWISE=1 &&
-                  export MONARCH_ATTN_TARGET_SPARSITY=0.65 &&
                   export MONARCH_ATTN_NUM_ITERS=1 &&
                   export MONARCH_ATTN_H_REDUCE=1 &&
                   export MONARCH_ATTN_W_REDUCE=1 &&

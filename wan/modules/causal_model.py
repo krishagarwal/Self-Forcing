@@ -22,6 +22,7 @@ import os
 from .sparse_videogen.attention import sparse_attention, Wan_SparseAttn, prepare_flexattention, prepare_dense_attention
 from .sparse_videogen.utils import get_attention_mask, sparsity_to_width
 from .radial_attn.attn_mask import MaskMap, RadialAttention
+from .monarch_attn import monarch_attn_with_kv_cache
 
 # class MonarchAttnImplicitFn(torch.autograd.Function):
 #     @staticmethod
@@ -739,8 +740,8 @@ class CausalWanSelfAttention(nn.Module):
             self.target_sparsity = float(self.target_sparsity)
         self.use_initialize = bool(int(os.getenv("MONARCH_ATTN_USE_INITIALIZE", "0")))
         self.use_dense_init = bool(int(os.getenv("USE_DENSE_INIT", "0")))
-        self.h_reduce = int(os.getenv("MONARCH_ATTN_H_REDUCE", "2"))
-        self.w_reduce = int(os.getenv("MONARCH_ATTN_W_REDUCE", "2"))
+        self.h_reduce = int(os.getenv("MONARCH_ATTN_H_REDUCE", "1"))
+        self.w_reduce = int(os.getenv("MONARCH_ATTN_W_REDUCE", "1"))
         self.init_h_reduce = os.getenv("MONARCH_ATTN_INIT_H_REDUCE")
         if self.init_h_reduce is not None:
             self.init_h_reduce = int(self.init_h_reduce)
@@ -752,8 +753,10 @@ class CausalWanSelfAttention(nn.Module):
         self.disable_monarch = bool(int(os.getenv("DISABLE_MONARCH_ATTN", "0")))
         self.exact_monarch = bool(int(os.getenv("MONARCH_ATTN_EXACT", "0")))
         layer_disable_list = os.getenv("MONARCH_ATTN_DISABLE_LAYERS")
+        self.topk = os.getenv("ATTN_TOPK_PCT")
         self.use_hacks = bool(int(os.getenv("USE_HACKS", "0")))
-        self.topk = float(os.getenv("ATTN_TOPK_PCT", "0.0"))
+        if self.topk is not None:
+            self.topk = float(self.topk)
         if layer_disable_list is not None:
             assert block_num is not None
             layer_disable_list = [int(x) for x in layer_disable_list.split(",")]
@@ -986,7 +989,7 @@ class CausalWanSelfAttention(nn.Module):
 
             is_init = (self.use_dense_init and curr_k.size(1) == (3 * grid_sizes[0, 1].item() * grid_sizes[0, 2].item()))
             if (self.disable_monarch and not self.use_svg and not self.use_radial_attn) or is_init:
-                if not is_init and self.topk != 0.0:
+                if not is_init and self.topk is not None:
                     curr_k[:, local_start_index:local_end_index] = roped_key
                     curr_v[:, local_start_index:local_end_index] = v
                     qk = torch.einsum('bihd,bjhd->bhij', roped_query, curr_k) * (d ** -0.5)
@@ -1005,11 +1008,6 @@ class CausalWanSelfAttention(nn.Module):
                         local_end_index,
                         grad_only_new_kv=not (kv_cache["k"].requires_grad or kv_cache["v"].requires_grad)
                     )
-                    # x = attention(
-                    #     roped_query,
-                    #     curr_k,
-                    #     curr_v
-                    # )
             elif self.use_svg:
                 curr_k[:, local_start_index:local_end_index] = roped_key
                 curr_v[:, local_start_index:local_end_index] = v
@@ -1134,50 +1132,21 @@ class CausalWanSelfAttention(nn.Module):
                     x = x[:, curr_k.size(1) - roped_query.size(1) : curr_k.size(1), :, :]
                     assert x.shape == roped_query.shape
             else:
-                curr_k[:, local_start_index:local_end_index] = roped_key
-                curr_v[:, local_start_index:local_end_index] = v
-                block_b1, block_b2 = self.get_block_sizes(grid_sizes[0, 1].item(), grid_sizes[0, 2].item(), q.size(1), curr_k.size(1))
-                # block_b1 = grid_sizes[0, 1]
-                # block_b2 = grid_sizes[0, 2]
-
-                b, s, h, d = roped_query.shape
-                h1, w1 = grid_sizes[0, 1].item(), grid_sizes[0, 2].item()
-                if self.target_sparsity is None or self.target_sparsity == 0.95 or self.target_sparsity == 0.9:
-                    def rearrange_fn(x):
-                        return x.view(b, -1, block_b1, block_b2, h, d)
-                    def return_fn(x):
-                        return x.reshape(b, s, h, d)
-                elif self.target_sparsity == 0.85:
-                    def rearrange_fn(x):
-                        x = x.view(b, -1, block_b1, w1 // block_b2, block_b2, h, d)
-                        return rearrange(x, 'b a i c j h d -> b (a c) i j h d')
-                    def return_fn(x):
-                        return rearrange(x, 'b (a c) i j h d -> b (a i c j) h d', c=(w1 // block_b2))
-                elif self.target_sparsity == 0.75:
-                    f_per_set, block_b1 = block_b1
-                    def rearrange_fn(x):
-                        x = x.view(b, -1, f_per_set, h1 // block_b1, block_b1, block_b2, h, d)
-                        return rearrange(x, 'b a f c i j h d -> b (a c) (f i) j h d')
-                    def return_fn(x):
-                        return rearrange(x, 'b (a c) (f i) j h d -> b (a f c i j) h d', c=h1 // block_b1, f=f_per_set)
-                else:
-                    f_per_set, block_b1 = block_b1
-                    def rearrange_fn(x):
-                        x = x.view(b, -1, f_per_set, h1 // block_b1, block_b1, w1 // block_b2, block_b2, h, d)
-                        return rearrange(x, 'b a f c i e j h d -> b (a c e) (f i) j h d')
-                    def return_fn(x):
-                        return rearrange(x, 'b (a c e) (f i) j h d -> b (a f c i e j) h d', c=h1 // block_b1, e=w1 // block_b2, f=f_per_set)
-                # curr_q = roped_query.view(b, -1, block_b1, block_b2, h, d)
-                # curr_k = curr_k.view(b, -1, block_b1, block_b2, h, d)
-                # curr_v = curr_v.view(b, -1, block_b1, block_b2, h, d)
-                # x = monarch_attn(curr_q, curr_k, curr_v, d ** -0.5, self.num_iters, self.eps).reshape(b, s, h, d)
-                curr_q = rearrange_fn(roped_query)
-                curr_k = rearrange_fn(curr_k)
-                curr_v = rearrange_fn(curr_v)
-                if self.exact_monarch:
-                    x = return_fn(monarch_attn_exact_decomp(curr_q, curr_k, curr_v, d ** -0.5))
-                else:
-                    x = return_fn(monarch_attn(curr_q, curr_k, curr_v, d ** -0.5, self.num_iters, self.eps))
+                x = monarch_attn_with_kv_cache(
+                    roped_query,
+                    curr_k,
+                    curr_v,
+                    roped_key,
+                    v,
+                    local_start_index,
+                    local_end_index,
+                    1 if self.use_framewise else 3,
+                    self.h_reduce,
+                    self.w_reduce,
+                    30,
+                    52,
+                    grad_only_new_kv=not (kv_cache["k"].requires_grad or kv_cache["v"].requires_grad)
+                )
 
             kv_cache["global_end_index"].fill_(current_end)
             kv_cache["local_end_index"].fill_(local_end_index)
