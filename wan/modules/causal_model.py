@@ -1,4 +1,4 @@
-from wan.modules.attention import attention
+# from wan.modules.attention import attention
 from wan.modules.attn_patch import full_attention_with_kv_cache
 from wan.modules.model import (
     WanRMSNorm,
