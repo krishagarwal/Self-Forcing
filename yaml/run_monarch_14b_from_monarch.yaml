@@ -110,7 +110,7 @@ spec:
                   git clone https://huggingface.co/Wan-AI/Wan2.1-T2V-14B &&
                   ln -s /dev/shm/Wan2.1-T2V-14B /workspace/Wan2.1-T2V-1.3B &&
                   cd /code-fsx/beidchen-sandbox/Self-Forcing &&
-                  pip uninstall -y torch torchvision torchaudio &&
+                  pip uninstall -y flashinfer-python flash_attn flash_attn_interface &&
                   pip install torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu126 &&
                   pip install -r requirements.txt &&
                   pip install flashinfer-python &&
