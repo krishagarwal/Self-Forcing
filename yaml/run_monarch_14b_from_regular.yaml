@@ -111,7 +111,6 @@ spec:
                   ln -s /dev/shm/Wan2.1-T2V-14B /workspace/Wan2.1-T2V-1.3B &&
                   cd /code-fsx/beidchen-sandbox/Self-Forcing &&
                   pip install -r requirements.txt &&
-                  pip install torch==2.8 &&
                   pip install flashinfer-python &&
                   python setup.py develop &&
                   mkdir -p /checkpoints-fsx/beidchen-sandbox/self_forcing_logs/dmd_monarch_fast_framewise_14b_from_regular &&
