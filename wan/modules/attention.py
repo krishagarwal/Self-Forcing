@@ -12,6 +12,8 @@ try:
     FLASH_ATTN_3_AVAILABLE = is_hopper_gpu()
 except ModuleNotFoundError:
     FLASH_ATTN_3_AVAILABLE = False
+except Exception: # TODO: quick patch
+    FLASH_ATTN_3_AVAILABLE = False
 
 try:
     import flash_attn
