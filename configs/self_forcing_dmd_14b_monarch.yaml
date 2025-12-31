@@ -22,8 +22,8 @@ wandb_key: WANDB_KEY
 wandb_entity: WANDB_ENTITY
 wandb_project: self_forcing
 sharding_strategy: hybrid_full
-lr: 2.0e-06
-lr_critic: 2.0e-06
+lr: 1.0e-06
+lr_critic: 2.0e-07
 beta1: 0.0
 beta2: 0.999
 beta1_critic: 0.0
@@ -54,3 +54,4 @@ load_raw_video: false
 model_kwargs:
   timestep_shift: 5.0
 convert_dist_cp: /checkpoints-fsx/beidchen-sandbox/self_forcing_logs/wan_14b_causal_monarch_fast_framewise/checkpoint_model_001000/
+cpu_offload_all: true

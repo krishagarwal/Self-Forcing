@@ -98,7 +98,7 @@ def keep(conf):
     return not (torch.cuda.get_device_capability()[0] == 9 and BLOCK_J * BLOCK_L < 128 * 128
                 and conf.num_warps == 8)
 
-@triton.autotune(configs=list(filter(keep, configs)), key=["A_CHUNK", "F_CHUNK", "block_b1", "block_b2", "HEAD_DIM", "OUTPUT_LSE"], cache_results=True)
+@triton.autotune(configs=list(filter(keep, configs)), key=["A_CHUNK", "F_CHUNK", "block_b1", "block_b2", "HEAD_DIM", "OUTPUT_LSE"])
 @triton.jit
 def _al_cl_y_fwd(Z, H, A, F,
                  a_start, f_start,
@@ -331,19 +331,19 @@ def _init_al_cl_y_bwd_descs(Z, H, A, F, A_CHUNK, F_CHUNK, HEAD_DIM, block_b1, bl
 
     return descs
 
-_grad_q_backup = None
+_alcly_dq_backup = None
 def _al_cl_y_bwd_pre_hook(nargs):
     BLOCK_J = nargs["BLOCK_J"]
     BLOCK_L = nargs["BLOCK_L"]
     HEAD_DIM = nargs["HEAD_DIM"]
-    global _grad_q_backup
+    global _alcly_dq_backup
 
     if not isinstance(nargs["ar_ptr"], TensorDescriptor):
-        if _grad_q_backup is not None:
-            nargs["dq_ptr"].copy_(_grad_q_backup)
+        if _alcly_dq_backup is not None:
+            nargs["dq_ptr"].copy_(_alcly_dq_backup)
         return
-    if _grad_q_backup is not None:
-        nargs["dq_ptr"].base.copy_(_grad_q_backup)
+    if _alcly_dq_backup is not None:
+        nargs["dq_ptr"].base.copy_(_alcly_dq_backup)
 
     nargs["ar_ptr"].block_shape = [1, 1, 1, BLOCK_J, HEAD_DIM]
     nargs["dq_ptr"].block_shape = [1, 1, 1, BLOCK_J, HEAD_DIM]
@@ -372,15 +372,16 @@ def keep(conf):
     return not (torch.cuda.get_device_capability()[0] == 9 and BLOCK_J * BLOCK_L < 128 * 128
                 and conf.num_warps == 8)
 
-_evaluated_configs = set()
-def _start_evaluate(block_b1, block_b2, HEAD_DIM):
-    global _evaluated_configs
-    if (block_b1, block_b2, HEAD_DIM) in _evaluated_configs:
+_alcly_bwd_evaluated_configs = set()
+def _start_alcly_bwd_evaluate(A_CHUNK, F_CHUNK, block_b1, block_b2, HEAD_DIM, PARTIAL_KV_GRAD, dtype):
+    global _alcly_bwd_evaluated_configs
+    config = (A_CHUNK, F_CHUNK, block_b1, block_b2, HEAD_DIM, PARTIAL_KV_GRAD, dtype)
+    if config in _alcly_bwd_evaluated_configs:
         return False
-    _evaluated_configs.add((block_b1, block_b2, HEAD_DIM))
+    _alcly_bwd_evaluated_configs.add(config)
     return True
 
-@triton.autotune(configs=list(filter(keep, configs)), key=["A_CHUNK", "F_CHUNK", "block_b1", "block_b2", "HEAD_DIM", "PARTIAL_KV_GRAD"], cache_results=True)
+@triton.autotune(configs=list(filter(keep, configs)), key=["A_CHUNK", "F_CHUNK", "block_b1", "block_b2", "HEAD_DIM", "PARTIAL_KV_GRAD"])
 @triton.jit
 def _al_cl_y_bwd(Z, H, A, F,
                  a_start, f_start,
@@ -647,7 +648,7 @@ def keep(conf):
     return not (torch.cuda.get_device_capability()[0] == 9 and BLOCK_I * BLOCK_K < 128 * 128
                 and conf.num_warps == 8)
 
-@triton.autotune(configs=list(filter(keep, configs)), key=["A_CHUNK", "F_CHUNK", "block_b1", "block_b2", "HEAD_DIM", "OUTPUT_FULL_LSE", "OUTPUT_PARTIAL_LSE"], cache_results=True)
+@triton.autotune(configs=list(filter(keep, configs)), key=["A_CHUNK", "F_CHUNK", "block_b1", "block_b2", "HEAD_DIM", "OUTPUT_FULL_LSE", "OUTPUT_PARTIAL_LSE"])
 @triton.jit
 def _z_fwd(Z, H, A, F,
            a_start, f_start,
@@ -795,7 +796,7 @@ configs = [
     for w in [4, 8]\
 ]
 
-@triton.autotune(configs=configs, key=["HEAD_DIM", "block_b1", "block_b2"], cache_results=True)
+@triton.autotune(configs=configs, key=["HEAD_DIM", "block_b1", "block_b2"])
 @triton.jit
 def _z_bwd_preprocess(A, H,
                       z_ptr, dz_ptr, d_ptr,
@@ -840,7 +841,7 @@ def _init_z_bwd_descs(Z, H, A, F, A_CHUNK, F_CHUNK, HEAD_DIM, block_b1, block_b2
     ZA = Z * A
     jhd_stride = block_b2 * hd_stride
     ijhd_stride = block_b1 * jhd_stride
-    ZHAJ = Z * H * A_CHUNK * block_b2
+    ZHAJ = Z * H * A * block_b2
     ZHAFJ = ZAFJ * H
 
     descs = SimpleNamespace()
@@ -927,21 +928,18 @@ def _init_z_bwd_descs(Z, H, A, F, A_CHUNK, F_CHUNK, HEAD_DIM, block_b1, block_b2
 
     return descs
 
-_z_bwd_ran_once = False
-
+_z_dq_backup = None
 def _z_bwd_pre_hook(nargs):
     BLOCK_K = nargs["BLOCK_K"]
     BLOCK_I = nargs["BLOCK_I"]
     HEAD_DIM = nargs["HEAD_DIM"]
-    global _z_bwd_ran_once
+    global _z_dq_backup
     if not isinstance(nargs["al_ptr"], TensorDescriptor):
-        if not _z_bwd_ran_once:
-            nargs["dq_ptr"].zero_()
-        _z_bwd_ran_once = True
+        if _z_dq_backup is not None:
+            nargs["dq_ptr"].copy_(_z_dq_backup)
         return
-    if not _z_bwd_ran_once:
-        nargs["dq_ptr"].base.zero_()
-        _z_bwd_ran_once = True
+    if _z_dq_backup is not None:
+        nargs["dq_ptr"].base.copy_(_z_dq_backup)
     nargs["al_ptr"].block_shape = [1, BLOCK_K, 1, HEAD_DIM]
     nargs["dal_ptr"].block_shape = [1, BLOCK_K, 1, HEAD_DIM]
     nargs["y_ptr"].block_shape = [1, BLOCK_K, 1, HEAD_DIM]
@@ -972,7 +970,16 @@ def keep(conf):
     return not (torch.cuda.get_device_capability()[0] == 9 and BLOCK_I * BLOCK_K < 128 * 128
                 and conf.num_warps == 8)
 
-@triton.autotune(configs=list(filter(keep, configs)), key=["A_CHUNK", "F_CHUNK", "block_b1", "block_b2", "HEAD_DIM"], cache_results=True)
+_z_bwd_evaluated_configs = set()
+def _start_z_bwd_evaluate(A_CHUNK, F_CHUNK, block_b1, block_b2, HEAD_DIM, dtype):
+    global _z_bwd_evaluated_configs
+    config = (A_CHUNK, F_CHUNK, block_b1, block_b2, HEAD_DIM, dtype)
+    if config in _z_bwd_evaluated_configs:
+        return False
+    _z_bwd_evaluated_configs.add(config)
+    return True
+
+@triton.autotune(configs=list(filter(keep, configs)), key=["A_CHUNK", "F_CHUNK", "block_b1", "block_b2", "HEAD_DIM"])
 @triton.jit
 def _z_bwd(Z, H, A, F,
            a_start, f_start,
@@ -1005,7 +1012,7 @@ def _z_bwd(Z, H, A, F,
     AFJ = A_CHUNK * F_CHUNK * block_b2
     off_afj = (off_a * F_CHUNK + off_f) * block_b2 + off_j
     off_zafj = off_z * AFJ + off_afj
-    off_zhaj = (off_hz * A_CHUNK + off_a) * block_b2 + off_j
+    off_zhaj = (off_hz * A + (off_a + a_start)) * block_b2 + off_j
     off_zhafj = off_hz * AFJ + off_afj
 
     ZAFJ = Z * AFJ
@@ -1057,7 +1064,7 @@ def _z_bwd(Z, H, A, F,
         strides=[ijhd_stride, jhd_stride, hd_stride, HEAD_DIM, 1],
         block_shape=[1, BLOCK_I, 1, 1, HEAD_DIM]
     )
-    ZHAJ = Z * H * A_CHUNK * block_b2
+    ZHAJ = Z * H * A * block_b2
     desc_lse = tl.make_block_ptr(
         lse_ptr,
         shape=[ZHAJ, block_b1],
@@ -1330,8 +1337,9 @@ class _attention(torch.autograd.Function):
                     OUTPUT_LSE=True,
                 )
 
-                global _z_bwd_ran_once
-                _z_bwd_ran_once = False
+                global _z_dq_backup
+                if _start_z_bwd_evaluate(Q_FRAME_CHUNK, KV_FRAME_CHUNK, block_b1, block_b2, d, q.dtype):
+                    _z_dq_backup = grad_q.clone()
                 _z_bwd[_z_bwd_grid](
                     b, h, a, f,
                     q_frame_start, kv_frame_start,
@@ -1349,10 +1357,11 @@ class _attention(torch.autograd.Function):
                     block_b2,
                     d,
                 )
+                _z_dq_backup = None
 
-                global _grad_q_backup
-                if _start_evaluate(block_b1, block_b2, d):
-                    _grad_q_backup = grad_q.clone()
+                global _alcly_dq_backup
+                if _start_alcly_bwd_evaluate(Q_FRAME_CHUNK, KV_FRAME_CHUNK, block_b1, block_b2, d, ctx.grad_only_new_kv, q.dtype):
+                    _alcly_dq_backup = grad_q.clone()
                 _al_cl_y_bwd[_al_cl_y_bwd_grid](
                     b, h, a, f,
                     q_frame_start, kv_frame_start,
@@ -1373,7 +1382,7 @@ class _attention(torch.autograd.Function):
                     d,
                     PARTIAL_KV_GRAD=ctx.grad_only_new_kv,
                 )
-                _grad_q_backup = None
+                _alcly_dq_backup = None
 
         grad_k = grad_k.view(b, -1, h, d)
         grad_v = grad_v.view(b, -1, h, d)
