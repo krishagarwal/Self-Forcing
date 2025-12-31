@@ -340,7 +340,7 @@ def _al_cl_y_bwd_pre_hook(nargs):
 
     if not isinstance(nargs["ar_ptr"], TensorDescriptor):
         if _grad_q_backup is not None:
-            nargs["dq_ptr"].copy(_grad_q_backup)
+            nargs["dq_ptr"].copy_(_grad_q_backup)
         return
     if _grad_q_backup is not None:
         nargs["dq_ptr"].base.copy_(_grad_q_backup)
