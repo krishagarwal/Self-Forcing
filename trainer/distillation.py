@@ -656,7 +656,7 @@ class Trainer:
         start_step = self.step
 
         while self.step <= 700 and not self.inference_only:
-            if self.step % 100 == 0 and not (self.disable_wandb or self.val_prompts is None):
+            if self.step % 100 == 0 and not (self.disable_wandb or self.val_prompts is None or self.step == 0):
                 self.run_validation()
                 if self.generator_ema is not None and self.step > self.config.ema_start_step:
                     with self.use_generator_ema():

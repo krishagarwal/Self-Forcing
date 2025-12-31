@@ -1,4 +1,4 @@
-generator_ckpt: /checkpoints-fsx/beidchen-sandbox/self_forcing_logs/wan_14b_causal_monarch_fast_framewise/checkpoint_model_001000/model.pt
+generator_ckpt: /workspace/model.pt
 generator_fsdp_wrap_strategy: size
 real_score_fsdp_wrap_strategy: size
 fake_score_fsdp_wrap_strategy: size

@@ -1,7 +1,7 @@
 apiVersion: "kubeflow.org/v1"
 kind: PyTorchJob
 metadata:
-  name: beidchen-train-rl-sf-regular-26 # JOB_NAME like  <alias>-<pod/mpijob/torchjob>-<p4/g5/r5>-<project>-<task>[-<note>]
+  name: beidchen-train-rl-sf-regular-29 # JOB_NAME like  <alias>-<pod/mpijob/torchjob>-<p4/g5/r5>-<project>-<task>[-<note>]
   namespace: default
 spec:
   elasticPolicy:
@@ -10,7 +10,7 @@ spec:
     maxReplicas: 8
     maxRestarts: 8
     nProcPerNode: &gpus_per_node 8
-    rdzvId: beidchen-train-rl-sf-regular-26
+    rdzvId: beidchen-train-rl-sf-regular-29
   runPolicy:
     ttlSecondsAfterFinished: 180 # give enough time to push any logs
     schedulingPolicy:
@@ -117,6 +117,7 @@ spec:
                   pip install flashinfer-python &&
                   python setup.py develop &&
                   mkdir -p /checkpoints-fsx/beidchen-sandbox/self_forcing_logs/dmd_monarch_fast_framewise_14b_from_monarch &&
+                  cp /checkpoints-fsx/beidchen-sandbox/self_forcing_logs/wan_14b_causal_monarch_fast_framewise/checkpoint_model_001000/model.pt /workspace/model.pt &&
                   export DISABLE_MONARCH_ATTN=0 &&
                   export MONARCH_ATTN_FRAMEWISE=1 &&
                   export MONARCH_ATTN_NUM_ITERS=1 &&
@@ -138,7 +139,7 @@ spec:
                   nvidia.com/gpu: *gpus_per_node
                   vpc.amazonaws.com/efa: 16
                   memory: 1900Gi
-                  ephemeral-storage: 32Gi
+                  ephemeral-storage: 128Gi
               volumeMounts:
                 - mountPath: /data-fsx
                   name: fsx-claim-general--atl-2a2
