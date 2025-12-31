@@ -24,6 +24,8 @@ try:
     FLASH_ATTN_3_AVAILABLE = True
 except ModuleNotFoundError:
     FLASH_ATTN_3_AVAILABLE = False
+except Exception:  # TODO: quick patch
+    FLASH_ATTN_3_AVAILABLE = False
 
 try:
     import flash_attn
