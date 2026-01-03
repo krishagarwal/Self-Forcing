@@ -22,6 +22,14 @@ def _maybe_make_tensor_desc(desc_or_ptr, shape, strides, block_shape):
     else:
         return tl.make_tensor_descriptor(desc_or_ptr, shape, strides, block_shape)
 
+@triton.jit
+def _min(a, b):
+    return a if a < b else b
+
+@triton.jit
+def _max(a, b):
+    return a if a > b else b
+
 def _init_al_cl_y_fwd_descs(Z, H, A, F, A_CHUNK, F_CHUNK, HEAD_DIM, block_b1, block_b2, aR, k, v, aL, y):
     ZAF = Z * A_CHUNK * F_CHUNK
     ZFK = Z * F * block_b1
@@ -98,7 +106,7 @@ def keep(conf):
     return not (torch.cuda.get_device_capability()[0] == 9 and BLOCK_J * BLOCK_L < 128 * 128
                 and conf.num_warps == 8)
 
-@triton.autotune(configs=list(filter(keep, configs)), key=["A_CHUNK", "F_CHUNK", "block_b1", "block_b2", "HEAD_DIM", "OUTPUT_LSE"])
+@triton.autotune(configs=list(filter(keep, configs)), key=["A_CHUNK", "F_CHUNK", "block_b1", "block_b2", "HEAD_DIM", "OUTPUT_LSE", "CAUSAL_BLOCK_SIZE"])
 @triton.jit
 def _al_cl_y_fwd(Z, H, A, F,
                  a_start, f_start,
@@ -115,6 +123,7 @@ def _al_cl_y_fwd(Z, H, A, F,
                  block_b2: tl.constexpr,
                  HEAD_DIM: tl.constexpr,
                  OUTPUT_LSE: tl.constexpr,
+                 CAUSAL_BLOCK_SIZE: tl.constexpr,
                  BLOCK_J: tl.constexpr,
                  BLOCK_L: tl.constexpr,
                  ):
@@ -126,6 +135,10 @@ def _al_cl_y_fwd(Z, H, A, F,
     off_k = off_afk % block_b1
     off_f = (off_afk // block_b1) % curr_num_f + f_start
     off_a = off_afk // (block_b1 * curr_num_f) + a_start
+
+    if CAUSAL_BLOCK_SIZE > 0:
+        if (off_a // CAUSAL_BLOCK_SIZE) < (off_f // CAUSAL_BLOCK_SIZE):
+            return
 
     off_zaf = (off_z * A_CHUNK + (off_a - a_start)) * F_CHUNK + (off_f - f_start)
     ZAF = Z * A_CHUNK * F_CHUNK
@@ -373,15 +386,15 @@ def keep(conf):
                 and conf.num_warps == 8)
 
 _alcly_bwd_evaluated_configs = set()
-def _start_alcly_bwd_evaluate(A_CHUNK, F_CHUNK, block_b1, block_b2, HEAD_DIM, PARTIAL_KV_GRAD, dtype):
+def _start_alcly_bwd_evaluate(A_CHUNK, F_CHUNK, block_b1, block_b2, HEAD_DIM, IS_FIRST_ITER, PARTIAL_KV_GRAD, CAUSAL_BLOCK_SIZE, dtype):
     global _alcly_bwd_evaluated_configs
-    config = (A_CHUNK, F_CHUNK, block_b1, block_b2, HEAD_DIM, PARTIAL_KV_GRAD, dtype)
+    config = (A_CHUNK, F_CHUNK, block_b1, block_b2, HEAD_DIM, IS_FIRST_ITER, PARTIAL_KV_GRAD, CAUSAL_BLOCK_SIZE, dtype)
     if config in _alcly_bwd_evaluated_configs:
         return False
     _alcly_bwd_evaluated_configs.add(config)
     return True
 
-@triton.autotune(configs=list(filter(keep, configs)), key=["A_CHUNK", "F_CHUNK", "block_b1", "block_b2", "HEAD_DIM", "PARTIAL_KV_GRAD"])
+@triton.autotune(configs=list(filter(keep, configs)), key=["A_CHUNK", "F_CHUNK", "block_b1", "block_b2", "HEAD_DIM", "PARTIAL_KV_GRAD", "CAUSAL_BLOCK_SIZE"])
 @triton.jit
 def _al_cl_y_bwd(Z, H, A, F,
                  a_start, f_start,
@@ -400,7 +413,9 @@ def _al_cl_y_bwd(Z, H, A, F,
                  block_b1: tl.constexpr,
                  block_b2: tl.constexpr,
                  HEAD_DIM: tl.constexpr,
+                 IS_FIRST_ITER: tl.constexpr,
                  PARTIAL_KV_GRAD: tl.constexpr,
+                 CAUSAL_BLOCK_SIZE: tl.constexpr,
                  BLOCK_J: tl.constexpr,
                  BLOCK_L: tl.constexpr,
                  ):
@@ -505,15 +520,25 @@ def _al_cl_y_bwd(Z, H, A, F,
     j_range = tl.arange(0, BLOCK_J)
     l_mask = (start_l + tl.arange(0, BLOCK_L)) < block_b2
 
-    dk_acc = tl.zeros([BLOCK_L, HEAD_DIM], dtype=tl.float32)
-    dv_acc = tl.zeros([BLOCK_L, HEAD_DIM], dtype=tl.float32)
+    if IS_FIRST_ITER:
+        dk_acc = tl.zeros([BLOCK_L, HEAD_DIM], dtype=tl.float32)
+        dv_acc = tl.zeros([BLOCK_L, HEAD_DIM], dtype=tl.float32)
+    else:
+        dk_acc = desc_dk.load([off_z, off_f - kv_grad_start_f if PARTIAL_KV_GRAD else off_f, off_k, start_l, off_hd]).reshape(BLOCK_L, HEAD_DIM).to(tl.float32)
+        dv_acc = desc_dv.load([off_z, off_f - kv_grad_start_f if PARTIAL_KV_GRAD else off_f, off_k, start_l, off_hd]).reshape(BLOCK_L, HEAD_DIM).to(tl.float32)
 
     sm_scale_sqrt = sm_scale_sqrt.to(dtype)
     k_l = desc_k.load([off_z, off_f + f_start, off_k, start_l, off_hd]).reshape(BLOCK_L, HEAD_DIM) * sm_scale_sqrt
     k_l = tl.where(l_mask[:, None], k_l, 0.0)
     v_l = desc_v.load([off_z, off_f + f_start, off_k, start_l, off_hd]).reshape(BLOCK_L, HEAD_DIM)
 
-    for a in tl.range(0, curr_num_a):
+    if CAUSAL_BLOCK_SIZE > 0:
+        a_lim = _max(0, _min(curr_num_a, ((off_f + f_start) // CAUSAL_BLOCK_SIZE) * CAUSAL_BLOCK_SIZE - a_start))
+        dcl_ptrs += a_lim * fkj_stride
+    else:
+        a_lim = 0
+
+    for a in tl.range(a_lim, curr_num_a):
         for j in tl.static_range(0, block_b2, BLOCK_J):
             j_mask = j_range + j < block_b2
 
@@ -558,7 +583,7 @@ def _al_cl_y_bwd(Z, H, A, F,
                 dv_acc = tl.dot(pT, dy_j, dv_acc)
 
         dcl_ptrs += fkj_stride
-    
+
     if kv_grad_enable:
         off_f = off_f + f_start
         dk_acc = dk_acc * sm_scale_sqrt
@@ -648,7 +673,7 @@ def keep(conf):
     return not (torch.cuda.get_device_capability()[0] == 9 and BLOCK_I * BLOCK_K < 128 * 128
                 and conf.num_warps == 8)
 
-@triton.autotune(configs=list(filter(keep, configs)), key=["A_CHUNK", "F_CHUNK", "block_b1", "block_b2", "HEAD_DIM", "OUTPUT_FULL_LSE", "OUTPUT_PARTIAL_LSE"])
+@triton.autotune(configs=list(filter(keep, configs)), key=["A_CHUNK", "F_CHUNK", "block_b1", "block_b2", "HEAD_DIM", "OUTPUT_FULL_LSE", "OUTPUT_PARTIAL_LSE", "CAUSAL_BLOCK_SIZE"])
 @triton.jit
 def _z_fwd(Z, H, A, F,
            a_start, f_start,
@@ -665,6 +690,7 @@ def _z_fwd(Z, H, A, F,
            HEAD_DIM: tl.constexpr,
            OUTPUT_FULL_LSE: tl.constexpr,
            OUTPUT_PARTIAL_LSE: tl.constexpr,
+           CAUSAL_BLOCK_SIZE: tl.constexpr,
            BLOCK_K: tl.constexpr,
            BLOCK_I: tl.constexpr,
            ):
@@ -753,7 +779,12 @@ def _z_fwd(Z, H, A, F,
     q_i = q_i * sm_scale_sqrt
     k_range = tl.arange(0, BLOCK_K)
 
-    for f in tl.range(0, curr_num_f):
+    if CAUSAL_BLOCK_SIZE > 0:
+        f_lim = _min(curr_num_f, _max(0, (off_a // CAUSAL_BLOCK_SIZE + 1) * CAUSAL_BLOCK_SIZE - f_start))
+    else:
+        f_lim = curr_num_f
+
+    for f in tl.range(0, f_lim):
         for k in tl.static_range(0, block_b1, BLOCK_K):
             k_mask = k_range + k < block_b1
             al_k = desc_al.load([off_za_mod, f, off_j, k, off_hd]).reshape(BLOCK_K, HEAD_DIM)
@@ -784,7 +815,7 @@ def _z_fwd(Z, H, A, F,
     z_acc = z_acc / l_i[:, None]
     desc_z.store([off_za, start_i, off_j, off_h, 0], z_acc.to(dtype).reshape(1, BLOCK_I, 1, 1, HEAD_DIM))
 
-    if OUTPUT_FULL_LSE or OUTPUT_PARTIAL_LSE:            
+    if OUTPUT_FULL_LSE or OUTPUT_PARTIAL_LSE:
         lse = m_i + tl.math.log2(l_i)
         tl.store(desc_lse.advance([off_zha if OUTPUT_FULL_LSE else off_zha_mod, off_j, start_i]), lse.reshape(1, 1, BLOCK_I), boundary_check=(2,))
 
@@ -971,15 +1002,15 @@ def keep(conf):
                 and conf.num_warps == 8)
 
 _z_bwd_evaluated_configs = set()
-def _start_z_bwd_evaluate(A_CHUNK, F_CHUNK, block_b1, block_b2, HEAD_DIM, dtype):
+def _start_z_bwd_evaluate(A_CHUNK, F_CHUNK, block_b1, block_b2, HEAD_DIM, CAUSAL_BLOCK_SIZE, dtype):
     global _z_bwd_evaluated_configs
-    config = (A_CHUNK, F_CHUNK, block_b1, block_b2, HEAD_DIM, dtype)
+    config = (A_CHUNK, F_CHUNK, block_b1, block_b2, HEAD_DIM, CAUSAL_BLOCK_SIZE, dtype)
     if config in _z_bwd_evaluated_configs:
         return False
     _z_bwd_evaluated_configs.add(config)
     return True
 
-@triton.autotune(configs=list(filter(keep, configs)), key=["A_CHUNK", "F_CHUNK", "block_b1", "block_b2", "HEAD_DIM"])
+@triton.autotune(configs=list(filter(keep, configs)), key=["A_CHUNK", "F_CHUNK", "block_b1", "block_b2", "HEAD_DIM", "CAUSAL_BLOCK_SIZE"])
 @triton.jit
 def _z_bwd(Z, H, A, F,
            a_start, f_start,
@@ -996,6 +1027,7 @@ def _z_bwd(Z, H, A, F,
            block_b1: tl.constexpr,
            block_b2: tl.constexpr,
            HEAD_DIM: tl.constexpr,
+           CAUSAL_BLOCK_SIZE: tl.constexpr,
            BLOCK_K: tl.constexpr,
            BLOCK_I: tl.constexpr,
            ):
@@ -1008,6 +1040,10 @@ def _z_bwd(Z, H, A, F,
     off_f = (off_afj // block_b2) % curr_num_f
     off_a = off_afj // (block_b2 * curr_num_f)
     off_za = off_z * A + (off_a + a_start)
+
+    if CAUSAL_BLOCK_SIZE > 0:
+        if ((off_a + a_start) // CAUSAL_BLOCK_SIZE) < ((off_f + f_start) // CAUSAL_BLOCK_SIZE):
+            return
 
     AFJ = A_CHUNK * F_CHUNK * block_b2
     off_afj = (off_a * F_CHUNK + off_f) * block_b2 + off_j
@@ -1165,7 +1201,7 @@ def _z_bwd(Z, H, A, F,
         tl.store(desc_dcl.advance([off_zhafj, start_k]), dcl_k_acc.reshape(1, BLOCK_K), boundary_check=(1,))
 
 
-class _attention(torch.autograd.Function):
+class _attention_with_cache(torch.autograd.Function):
     @staticmethod
     def forward(ctx, q, k_cache, v_cache, new_k, new_v, start_idx, end_idx, sm_scale, grad_enabled, grad_only_new_kv):
         b, a, block_b1, block_b2, h, d = q.shape
@@ -1227,6 +1263,7 @@ class _attention(torch.autograd.Function):
                     block_b2,
                     d,
                     OUTPUT_LSE=False,
+                    CAUSAL_BLOCK_SIZE=0,
                 )
         
                 _z_fwd[_z_grid](
@@ -1245,6 +1282,7 @@ class _attention(torch.autograd.Function):
                     HEAD_DIM=d,
                     OUTPUT_FULL_LSE=grad_enabled,
                     OUTPUT_PARTIAL_LSE=(not grad_enabled and kv_frame_start + KV_FRAME_CHUNK < f),
+                    CAUSAL_BLOCK_SIZE=0,
                 )
         
         if grad_enabled:
@@ -1335,10 +1373,11 @@ class _attention(torch.autograd.Function):
                     block_b2,
                     d,
                     OUTPUT_LSE=True,
+                    CAUSAL_BLOCK_SIZE=0,
                 )
 
                 global _z_dq_backup
-                if _start_z_bwd_evaluate(Q_FRAME_CHUNK, KV_FRAME_CHUNK, block_b1, block_b2, d, q.dtype):
+                if _start_z_bwd_evaluate(Q_FRAME_CHUNK, KV_FRAME_CHUNK, block_b1, block_b2, d, 0, q.dtype):
                     _z_dq_backup = grad_q.clone()
                 _z_bwd[_z_bwd_grid](
                     b, h, a, f,
@@ -1356,11 +1395,12 @@ class _attention(torch.autograd.Function):
                     block_b1,
                     block_b2,
                     d,
+                    CAUSAL_BLOCK_SIZE=0,
                 )
                 _z_dq_backup = None
 
                 global _alcly_dq_backup
-                if _start_alcly_bwd_evaluate(Q_FRAME_CHUNK, KV_FRAME_CHUNK, block_b1, block_b2, d, ctx.grad_only_new_kv, q.dtype):
+                if _start_alcly_bwd_evaluate(Q_FRAME_CHUNK, KV_FRAME_CHUNK, block_b1, block_b2, q_frame_start == 0, d, ctx.grad_only_new_kv, 0, q.dtype):
                     _alcly_dq_backup = grad_q.clone()
                 _al_cl_y_bwd[_al_cl_y_bwd_grid](
                     b, h, a, f,
@@ -1380,7 +1420,9 @@ class _attention(torch.autograd.Function):
                     block_b1,
                     block_b2,
                     d,
+                    IS_FIRST_ITER=q_frame_start == 0,
                     PARTIAL_KV_GRAD=ctx.grad_only_new_kv,
+                    CAUSAL_BLOCK_SIZE=0,
                 )
                 _alcly_dq_backup = None
 
@@ -1395,6 +1437,217 @@ class _attention(torch.autograd.Function):
 
         return grad_q.to(torch.float32), grad_k_cache, grad_v_cache, grad_k, grad_v, None, None, None, None, None
 
+class _attention_no_cache(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, q, k, v, sm_scale, causal_block_size, grad_enabled):
+        b, a, block_b1, block_b2, h, d = q.shape
+        f = k.shape[1]
+
+        sm_scale_sqrt = sm_scale ** 0.5
+
+        def alloc_fn(size: int, align: int, _):
+            return torch.empty(size, dtype=torch.int8, device="cuda")
+        triton.set_allocator(alloc_fn)
+
+        Q_FRAME_CHUNK = 3
+        KV_FRAME_CHUNK = 3
+
+        aL = torch.empty((b, Q_FRAME_CHUNK, KV_FRAME_CHUNK, block_b2, block_b1, h, d), device=q.device, dtype=q.dtype) # (b, a, f, j, k, h, d)
+        cL = torch.empty((b, h, Q_FRAME_CHUNK, KV_FRAME_CHUNK, block_b2, block_b1), device=q.device, dtype=torch.float32)  # (b, h, a, f, j, k)
+
+        y = torch.empty((b, Q_FRAME_CHUNK, KV_FRAME_CHUNK, block_b2, block_b1, h, d), device=q.device, dtype=q.dtype) # (b, a, f, j, k, h, d)
+        al_cl_y_fwd_descs = _init_al_cl_y_fwd_descs(b, h, a, f, Q_FRAME_CHUNK, KV_FRAME_CHUNK, d, block_b1, block_b2, q, k, v, aL, y)
+
+        z = torch.empty((b, a, block_b1, block_b2, h, d), device=q.device, dtype=q.dtype) # (b, a, i, j, h, d)
+        z_fwd_descs = _init_z_fwd_descs(b, h, a, f, Q_FRAME_CHUNK, KV_FRAME_CHUNK, d, block_b1, block_b2, aL, y, q, z, cL)
+        if grad_enabled:
+            z_lse = torch.empty((b, h, a, block_b2, block_b1), device=q.device, dtype=torch.float32) # (b, h, a, j, i)
+        elif KV_FRAME_CHUNK < f:
+            z_lse = torch.empty((b, h, Q_FRAME_CHUNK, block_b2, block_b1), device=q.device, dtype=torch.float32) # (b, h, a, j, i)
+        else:
+            z_lse = None
+
+        assert k.stride() == v.stride(), "current implementation assumes same strides for k and v"
+        for q_frame_start in range(0, a, Q_FRAME_CHUNK):
+            curr_q_frames = min(Q_FRAME_CHUNK, a - q_frame_start)
+            for kv_frame_start in range(0, f, KV_FRAME_CHUNK):
+                curr_kv_frames = min(KV_FRAME_CHUNK, f - kv_frame_start)
+                def _al_cl_y_grid(META):
+                    return (triton.cdiv(block_b2, META["BLOCK_J"]), b * h, curr_q_frames * curr_kv_frames * block_b1)
+                def _z_grid(META):
+                    return (triton.cdiv(block_b1, META["BLOCK_I"]), b * h, curr_q_frames * block_b2)
+
+                _al_cl_y_fwd[_al_cl_y_grid](
+                    b, h, a, f,
+                    q_frame_start, kv_frame_start,
+                    curr_q_frames, curr_kv_frames,
+                    al_cl_y_fwd_descs.aR,
+                    al_cl_y_fwd_descs.k, al_cl_y_fwd_descs.v,
+                    al_cl_y_fwd_descs.aL, cL,
+                    al_cl_y_fwd_descs.y, None,
+                    k.stride(0) // (block_b2 * h * d),
+                    sm_scale_sqrt,
+                    Q_FRAME_CHUNK,
+                    KV_FRAME_CHUNK,
+                    block_b1,
+                    block_b2,
+                    d,
+                    OUTPUT_LSE=False,
+                    CAUSAL_BLOCK_SIZE=causal_block_size,
+                )
+        
+                _z_fwd[_z_grid](
+                    b, h, a, f,
+                    q_frame_start, kv_frame_start,
+                    curr_q_frames, curr_kv_frames,
+                    z_fwd_descs.aL, z_fwd_descs.cL,
+                    z_fwd_descs.q, z_fwd_descs.y,
+                    z_fwd_descs.z, z_lse,
+                    sm_scale_sqrt,
+                    IS_FIRST_ITER=(kv_frame_start == 0),
+                    A_CHUNK=Q_FRAME_CHUNK,
+                    F_CHUNK=KV_FRAME_CHUNK,
+                    block_b1=block_b1,
+                    block_b2=block_b2,
+                    HEAD_DIM=d,
+                    OUTPUT_FULL_LSE=grad_enabled,
+                    OUTPUT_PARTIAL_LSE=(not grad_enabled and kv_frame_start + KV_FRAME_CHUNK < f),
+                    CAUSAL_BLOCK_SIZE=causal_block_size,
+                )
+        
+        if grad_enabled:
+            ctx.save_for_backward(q, k, v, z, z_lse)
+            ctx.sm_scale_sqrt = sm_scale_sqrt
+            ctx.causal_block_size = causal_block_size
+
+        return z
+
+    @staticmethod
+    def backward(ctx, grad_z):
+        q, k, v, z, z_lse = ctx.saved_tensors
+        sm_scale_sqrt = ctx.sm_scale_sqrt
+        causal_block_size = ctx.causal_block_size
+
+        b, a, block_b1, block_b2, h, d = z.shape
+        f = k.shape[1]
+
+        def alloc_fn(size: int, align: int, _):
+            return torch.empty(size, dtype=torch.int8, device="cuda")
+        triton.set_allocator(alloc_fn)
+
+        z_d = torch.empty_like(z_lse)
+        def grid(META):
+            return (b, triton.cdiv(a * block_b1 * block_b2, META["BLOCK_Q"]), h)
+        _z_bwd_preprocess[grid](
+            a, h,
+            z, grad_z, z_d,
+            block_b1,
+            block_b2,
+            d,
+        )
+
+        Q_FRAME_CHUNK = 3
+        KV_FRAME_CHUNK = 3
+
+        aL = torch.empty((b, Q_FRAME_CHUNK, KV_FRAME_CHUNK, block_b2, block_b1, h, d), device=q.device, dtype=q.dtype) # (b, a, f, j, k, h, d)
+        cL = torch.empty((b, h, Q_FRAME_CHUNK, KV_FRAME_CHUNK, block_b2, block_b1), device=q.device, dtype=torch.float32)  # (b, h, a, f, j, k)
+        y = torch.empty((b, Q_FRAME_CHUNK, KV_FRAME_CHUNK, block_b2, block_b1, h, d), device=q.device, dtype=q.dtype) # (b, a, f, j, k, h, d)
+        al_cl_y_lse = torch.empty((b, h, Q_FRAME_CHUNK, KV_FRAME_CHUNK, block_b1, block_b2), device=q.device, dtype=torch.float32)
+        al_cl_y_fwd_descs = _init_al_cl_y_fwd_descs(b, h, a, f, Q_FRAME_CHUNK, KV_FRAME_CHUNK, d, block_b1, block_b2, q, k, v, aL, y)
+
+        grad_aL = torch.empty_like(aL)
+        grad_cL = torch.empty_like(cL)
+        grad_q = torch.zeros_like(q, dtype=torch.float32)
+        grad_y = torch.empty_like(y)
+        aL_cL_y_d = torch.empty_like(al_cl_y_lse)
+        z_bwd_descs = _init_z_bwd_descs(b, h, a, f, Q_FRAME_CHUNK, KV_FRAME_CHUNK, d, block_b1, block_b2, aL, grad_aL, y, grad_y, q, grad_q, grad_z, z_lse, z_d, cL, grad_cL)
+
+        grad_k = torch.empty_like(k)
+        grad_v = torch.empty_like(v)
+        al_cl_y_bwd_descs = _init_al_cl_y_bwd_descs(b, h, a, f, Q_FRAME_CHUNK, KV_FRAME_CHUNK, d, block_b1, block_b2, q, k, v, grad_q, grad_k, grad_v, grad_aL, grad_y, al_cl_y_lse, aL_cL_y_d)
+
+        for q_frame_start in range(0, a, Q_FRAME_CHUNK):
+            curr_q_frames = min(Q_FRAME_CHUNK, a - q_frame_start)
+            for kv_frame_start in range(0, f, KV_FRAME_CHUNK):
+                curr_kv_frames = min(KV_FRAME_CHUNK, f - kv_frame_start)
+                def _al_cl_y_fwd_grid(META):
+                    return (triton.cdiv(block_b2, META["BLOCK_J"]), b * h, curr_q_frames * curr_kv_frames * block_b1)
+                def _z_bwd_grid(META):
+                    return (triton.cdiv(block_b1, META["BLOCK_K"]), b * h, curr_q_frames * curr_kv_frames * block_b2)
+                def _al_cl_y_bwd_grid(META):
+                    return (triton.cdiv(block_b2, META["BLOCK_L"]), b * h, curr_kv_frames * block_b1)
+
+                _al_cl_y_fwd[_al_cl_y_fwd_grid](
+                    b, h, a, f,
+                    q_frame_start, kv_frame_start,
+                    curr_q_frames, curr_kv_frames,
+                    al_cl_y_fwd_descs.aR,
+                    al_cl_y_fwd_descs.k, al_cl_y_fwd_descs.v,
+                    al_cl_y_fwd_descs.aL, cL,
+                    al_cl_y_fwd_descs.y, al_cl_y_lse,
+                    k.stride(0) // (block_b2 * h * d),
+                    sm_scale_sqrt,
+                    Q_FRAME_CHUNK,
+                    KV_FRAME_CHUNK,
+                    block_b1,
+                    block_b2,
+                    d,
+                    OUTPUT_LSE=True,
+                    CAUSAL_BLOCK_SIZE=causal_block_size,
+                )
+
+                global _z_dq_backup
+                if _start_z_bwd_evaluate(Q_FRAME_CHUNK, KV_FRAME_CHUNK, block_b1, block_b2, d, causal_block_size, q.dtype):
+                    _z_dq_backup = grad_q.clone()
+                _z_bwd[_z_bwd_grid](
+                    b, h, a, f,
+                    q_frame_start, kv_frame_start,
+                    curr_q_frames, curr_kv_frames,
+                    z_bwd_descs.aL, z_bwd_descs.cL,
+                    z_bwd_descs.q, z_bwd_descs.y,
+                    z_bwd_descs.grad_z, z_bwd_descs.lse, z_bwd_descs.d,
+                    z_bwd_descs.grad_aL, z_bwd_descs.grad_cL,
+                    z_bwd_descs.grad_q, z_bwd_descs.grad_y,
+                    aL_cL_y_d,
+                    sm_scale_sqrt,
+                    Q_FRAME_CHUNK,
+                    KV_FRAME_CHUNK,
+                    block_b1,
+                    block_b2,
+                    d,
+                    CAUSAL_BLOCK_SIZE=causal_block_size,
+                )
+                _z_dq_backup = None
+
+                global _alcly_dq_backup
+                if _start_alcly_bwd_evaluate(Q_FRAME_CHUNK, KV_FRAME_CHUNK, block_b1, block_b2, d, q_frame_start == 0, False, causal_block_size, q.dtype):
+                    _alcly_dq_backup = grad_q.clone()
+                _al_cl_y_bwd[_al_cl_y_bwd_grid](
+                    b, h, a, f,
+                    q_frame_start, kv_frame_start,
+                    curr_q_frames, curr_kv_frames,
+                    al_cl_y_bwd_descs.aR,
+                    al_cl_y_bwd_descs.k, al_cl_y_bwd_descs.v,
+                    al_cl_y_bwd_descs.grad_aL, grad_cL, al_cl_y_bwd_descs.grad_y,
+                    al_cl_y_bwd_descs.lse, al_cl_y_bwd_descs.d,
+                    al_cl_y_bwd_descs.grad_q,
+                    al_cl_y_bwd_descs.grad_k, al_cl_y_bwd_descs.grad_v,
+                    k.stride(0),
+                    0, f,
+                    sm_scale_sqrt,
+                    Q_FRAME_CHUNK,
+                    KV_FRAME_CHUNK,
+                    block_b1,
+                    block_b2,
+                    d,
+                    IS_FIRST_ITER=q_frame_start == 0,
+                    PARTIAL_KV_GRAD=False,
+                    CAUSAL_BLOCK_SIZE=causal_block_size,
+                )
+                _alcly_dq_backup = None
+
+        return grad_q.to(torch.float32), grad_k, grad_v, None, None, None
+
 def _get_rearrange_fns(x, f_tied, h_reduce, w_reduce, h, w):
     b, _, nh, d = x.shape
     def rearrange_fn(x):
@@ -1404,6 +1657,27 @@ def _get_rearrange_fns(x, f_tied, h_reduce, w_reduce, h, w):
         return rearrange(x, 'b (a c e) (f i) j h d -> b (a f c i e j) h d', c=h_reduce, e=w_reduce, f=f_tied)
     return rearrange_fn, return_fn
 
+def monarch_attn(q, k, v, f_tied, h_reduce, w_reduce, h, w, sm_scale=None, block_causal_size=None):
+    b, qs, nh, d = q.shape
+    ks = k.shape[1]
+    if sm_scale is None:
+        sm_scale = q.shape[-1] ** -0.5
+    rearrange_fn, return_fn = _get_rearrange_fns(q, f_tied, h_reduce, w_reduce, h, w)
+    q = rearrange_fn(q).contiguous()
+    k = rearrange_fn(k).contiguous()
+    v = rearrange_fn(v).contiguous()
+
+    causal_block_size = 0
+    if block_causal_size is not None:
+        assert qs % block_causal_size == 0, f"block_causal_size ({block_causal_size}) must divide sequence length ({qs})"
+        assert ks == qs, "currently only support causal attention with kv length equal to q length"
+        assert block_causal_size % (q.shape[2] * q.shape[3]) == 0, "block_causal_size must align with Monarch block sizes"
+        causal_block_size = block_causal_size // (q.shape[2] * q.shape[3])
+
+    z = _attention_no_cache.apply(q, k, v, sm_scale, causal_block_size, torch.is_grad_enabled())
+    z = return_fn(z)
+    return z
+
 def monarch_attn_with_kv_cache(q, k_cache, v_cache, new_k, new_v, start_idx, end_idx, f_tied, h_reduce, w_reduce, h, w, sm_scale=None, grad_only_new_kv=False):
     b, _, nh, d = q.shape
     if sm_scale is None:
@@ -1412,11 +1686,11 @@ def monarch_attn_with_kv_cache(q, k_cache, v_cache, new_k, new_v, start_idx, end
     q = rearrange_fn(q).contiguous()
     new_k = rearrange_fn(new_k).reshape(b, -1, nh, d)
     new_v = rearrange_fn(new_v).reshape(b, -1, nh, d)
-    z = _attention.apply(q, k_cache, v_cache, new_k, new_v, start_idx, end_idx, sm_scale, torch.is_grad_enabled(), grad_only_new_kv)
+    z = _attention_with_cache.apply(q, k_cache, v_cache, new_k, new_v, start_idx, end_idx, sm_scale, torch.is_grad_enabled(), grad_only_new_kv)
     z = return_fn(z)
     return z
 
-__all__ = ["monarch_attn_with_kv_cache"]
+__all__ = ["monarch_attn", "monarch_attn_with_kv_cache"]
 
 
 def monarch_attn_ref_op(Q, K, V, sm_scale):
@@ -1450,7 +1724,35 @@ def monarch_attn_ref_op(Q, K, V, sm_scale):
     out = torch.einsum("bhafjki,bafjkhd->baijhd", L, out)
     return out
 
-def monarch_attention_ref(q, k_cache, v_cache, new_k, new_v, start_idx, end_idx, f_tied, h_reduce, w_reduce, h, w, sm_scale=None, grad_only_new_kv=False):
+def monarch_attn_causal_ref(q, k, v, f_tied, h_reduce, w_reduce, h, w, block_causal_size, sm_scale=None):
+    b, qs, nh, d = q.shape
+    ks = k.shape[1]
+    if sm_scale is None:
+        sm_scale = q.shape[-1] ** -0.5
+    rearrange_fn, return_fn = _get_rearrange_fns(q, f_tied, h_reduce, w_reduce, h, w)
+    q = rearrange_fn(q).contiguous()
+    k = rearrange_fn(k).contiguous()
+    v = rearrange_fn(v).contiguous()
+
+    causal_block_size = 0
+    if block_causal_size is not None:
+        assert qs % block_causal_size == 0, f"block_causal_size ({block_causal_size}) must divide sequence length ({qs})"
+        assert ks == qs, "currently only support causal attention with kv length equal to q length"
+        assert block_causal_size % (q.shape[2] * q.shape[3]) == 0, "block_causal_size must align with Monarch block sizes"
+        causal_block_size = block_causal_size // (q.shape[2] * q.shape[3])
+
+    outs = []
+    for i in range(0, q.shape[1], causal_block_size):
+        curr_q = q[:, i:i+causal_block_size, :, :, :, :]
+        curr_k = k[:, :i+causal_block_size, :, :, :, :]
+        curr_v = v[:, :i+causal_block_size, :, :, :, :]
+        out = monarch_attn_ref_op(curr_q, curr_k, curr_v, sm_scale)
+        outs.append(out)
+    out = torch.cat(outs, dim=1)
+    out = return_fn(out)
+    return out
+
+def monarch_attn_with_kv_cache_ref(q, k_cache, v_cache, new_k, new_v, start_idx, end_idx, f_tied, h_reduce, w_reduce, h, w, sm_scale=None, grad_only_new_kv=False):
     if sm_scale is None:
         sm_scale = q.shape[-1] ** -0.5
     rearrange_fn, return_fn = _get_rearrange_fns(q, f_tied, h_reduce, w_reduce, h, w)
@@ -1470,7 +1772,7 @@ def monarch_attention_ref(q, k_cache, v_cache, new_k, new_v, start_idx, end_idx,
     out = monarch_attn_ref_op(q, k_cache, v_cache, sm_scale)
     return return_fn(out)
 
-def run_single_test(dtype, B, A, F, block_b1, block_b2, H, D, new_f, partial_kv_grad, device="cuda"):
+def run_kv_cache_test(dtype, B, A, F, block_b1, block_b2, H, D, new_f, partial_kv_grad, device="cuda"):
     print(f"Testing dtype={dtype}, B={B}, A={A}, F={F}, block_b1={block_b1}, block_b2={block_b2}, H={H}, D={D}, new_f={new_f}, partial_kv_grad={partial_kv_grad}")
     q = torch.randn(B, A * block_b1 * block_b2, H, D, device=device, dtype=dtype, requires_grad=True)
     k_cache = torch.randn(B, F * block_b1 * block_b2, H, D, device=device, dtype=dtype, requires_grad=False)
@@ -1496,7 +1798,7 @@ def run_single_test(dtype, B, A, F, block_b1, block_b2, H, D, new_f, partial_kv_
     sm_scale = D ** -0.5
 
     out_triton = monarch_attn_with_kv_cache(q1, k_cache1, v_cache1, new_k1, new_v1, start_idx, end_idx, 1, 1, 1, block_b1, block_b2, sm_scale, grad_only_new_kv=partial_kv_grad)
-    out_ref = monarch_attention_ref(q2, k_cache2, v_cache2, new_k2, new_v2, start_idx, end_idx, 1, 1, 1, block_b1, block_b2, sm_scale, grad_only_new_kv=partial_kv_grad)
+    out_ref = monarch_attn_with_kv_cache_ref(q2, k_cache2, v_cache2, new_k2, new_v2, start_idx, end_idx, 1, 1, 1, block_b1, block_b2, sm_scale, grad_only_new_kv=partial_kv_grad)
 
     atol = 1e-2 if dtype is torch.bfloat16 else 1e-3
     rtol = 1e-2 if dtype is torch.bfloat16 else 1e-3
@@ -1524,6 +1826,46 @@ def run_single_test(dtype, B, A, F, block_b1, block_b2, H, D, new_f, partial_kv_
 
     return fw_ok and bwd_q_ok and bwd_k_ok and bwd_v_ok
 
+def run_causal_test(dtype, B, F, block_b1, block_b2, H, D, device="cuda"):
+    print(f"Testing dtype={dtype}, B={B}, F={F}, block_b1={block_b1}, block_b2={block_b2}, H={H}, D={D}")
+    q = torch.randn(B, F * block_b1 * block_b2, H, D, device=device, dtype=dtype)
+    k = torch.randn(B, F * block_b1 * block_b2, H, D, device=device, dtype=dtype)
+    v = torch.randn(B, F * block_b1 * block_b2, H, D, device=device, dtype=dtype)
+
+    q1 = q.clone().detach().requires_grad_(True)
+    k1 = k.clone().detach().requires_grad_(True)
+    v1 = v.clone().detach().requires_grad_(True)
+    
+    q2 = q.clone().detach().requires_grad_(True)
+    k2 = k.clone().detach().requires_grad_(True)
+    v2 = v.clone().detach().requires_grad_(True)
+
+    sm_scale = D ** -0.5
+
+    out_triton = monarch_attn_causal_ref(q1, k1, v1, 1, 1, 1, block_b1, block_b2, block_b1 * block_b2, sm_scale)
+    out_ref = monarch_attn(q2, k2, v2, 1, 1, 1, block_b1, block_b2, sm_scale, block_b1 * block_b2)
+
+    atol = 1e-2 if dtype is torch.bfloat16 else 1e-3
+    rtol = 1e-2 if dtype is torch.bfloat16 else 1e-3
+
+    fw_ok = torch.allclose(out_triton, out_ref, atol=atol, rtol=rtol)
+    print("  forward allclose:", fw_ok)
+
+    dout = torch.randn_like(out_triton)
+    out_triton.backward(dout)
+    out_ref.backward(dout)
+
+    bwd_q_ok = torch.allclose(q1.grad, q2.grad, atol=atol, rtol=rtol)
+    bwd_k_ok = torch.allclose(k1.grad, k2.grad, atol=atol, rtol=rtol)
+    bwd_v_ok = torch.allclose(v1.grad, v2.grad, atol=atol, rtol=rtol)
+    print("  backward q allclose:", bwd_q_ok)
+    print("  backward k allclose:", bwd_k_ok)
+    print("  backward v allclose:", bwd_v_ok)
+
+    breakpoint()
+
+    return fw_ok and bwd_q_ok and bwd_k_ok and bwd_v_ok
+
 def run_tests():
     if not torch.cuda.is_available():
         print("CUDA not available, skipping tests.")
@@ -1531,15 +1873,28 @@ def run_tests():
     device = "cuda"
     torch.manual_seed(0)
 
+    # print("Running KV cache tests...")
+
+    # shapes = [
+    #     (1, 3, 21, 30, 52, 12, 128, 3),
+    #     (2, 3, 21, 30, 52, 12, 128, 3),
+    # ]
+    # for dtype in (torch.float16, torch.bfloat16):
+    #     for B, A, F, block_b1, block_b2, H, D, new_f in shapes:
+    #         for partial_kv_grad in (False, True):
+    #             ok = run_kv_cache_test(dtype, B, A, F, block_b1, block_b2, H, D, new_f, partial_kv_grad=partial_kv_grad, device=device)
+    #             print("  -> test passed:", ok)
+
+    print("Running causal tests...")
+
     shapes = [
-        (1, 3, 21, 30, 52, 12, 128, 3),
-        (2, 3, 21, 30, 52, 12, 128, 3),
+        (1, 21, 30, 52, 12, 128),
+        (2, 21, 30, 52, 12, 128),
     ]
-    for dtype in (torch.float16, torch.bfloat16):
-        for B, A, F, block_b1, block_b2, H, D, new_f in shapes:
-            for partial_kv_grad in (False, True):
-                ok = run_single_test(dtype, B, A, F, block_b1, block_b2, H, D, new_f, partial_kv_grad=partial_kv_grad, device=device)
-                print("  -> test passed:", ok)
+    for dtype in (torch.bfloat16,):
+        for B, F, block_b1, block_b2, H, D in shapes:
+            ok = run_causal_test(dtype, B, F, block_b1, block_b2, H, D, device=device)
+            print("  -> test passed:", ok)
 
 
 if __name__ == "__main__":

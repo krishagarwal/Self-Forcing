@@ -36,7 +36,7 @@ spec:
                         values:
                           - p5en.48xlarge
           tolerations:
-            - key: mziyadi-lmsys
+            - key: ikiss-swe-skills
               operator: Equal
               value: "True"
               effect: NoSchedule
@@ -117,15 +117,14 @@ spec:
                   pip install -r requirements.txt &&
                   pip install flashinfer-python &&
                   python setup.py develop &&
-                  mkdir -p /checkpoints-fsx/beidchen-sandbox/self_forcing_logs/wan_14b_causal_monarch_fast_framewise &&
+                  mkdir -p /checkpoints-fsx/beidchen-sandbox/self_forcing_logs/wan_14b_causal_monarch_fast_chunkwise &&
                   export DISABLE_MONARCH_ATTN=0 &&
-                  export MONARCH_ATTN_FRAMEWISE=1 &&
-                  export MONARCH_ATTN_TARGET_SPARSITY=0.65 &&
+                  export MONARCH_ATTN_FRAMEWISE=0 &&
                   export MONARCH_ATTN_NUM_ITERS=1 &&
                   export MONARCH_ATTN_H_REDUCE=1 &&
                   export MONARCH_ATTN_W_REDUCE=1 &&
                   export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True &&
-                  torchrun --nproc_per_node=8 --rdzv-conf="timeout=7200,read_timeout=7200,join_timeout=7200" train.py --config_path configs/wan_14b_causal_training.yaml --logdir /checkpoints-fsx/beidchen-sandbox/self_forcing_logs/wan_14b_causal_monarch_fast_framewise --wandb_name wan_14b_causal_monarch_fast_framewise | tee /code-fsx/beidchen-sandbox/wan_14b_causal_monarch_fast_framewise.log
+                  torchrun --nproc_per_node=8 --rdzv-conf="timeout=7200,read_timeout=7200,join_timeout=7200" train.py --config_path configs/wan_14b_causal_training.yaml --logdir /checkpoints-fsx/beidchen-sandbox/self_forcing_logs/wan_14b_causal_monarch_fast_chunkwise --wandb_name wan_14b_causal_monarch_fast_chunkwise | tee /code-fsx/beidchen-sandbox/wan_14b_causal_monarch_fast_chunkwise.log
               image: 767397878797.dkr.ecr.us-east-1.amazonaws.com/agif-mm-pt-base:reasoning-vllm.sglang.megatron.deepseek.video.fa3
               imagePullPolicy: Always
               securityContext:

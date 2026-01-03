@@ -22,7 +22,7 @@ import os
 from .sparse_videogen.attention import sparse_attention, Wan_SparseAttn, prepare_flexattention, prepare_dense_attention
 from .sparse_videogen.utils import get_attention_mask, sparsity_to_width
 from .radial_attn.attn_mask import MaskMap, RadialAttention
-from .monarch_attn import monarch_attn_with_kv_cache
+from .monarch_attn import monarch_attn, monarch_attn_with_kv_cache
 
 # class MonarchAttnImplicitFn(torch.autograd.Function):
 #     @staticmethod
@@ -627,7 +627,7 @@ def monarch_attn_exact_decomp(Q, K, V, sm_scale):
 
 #         return grad_Q, grad_K, grad_V, None, None, None
 
-monarch_attn = MonarchAttnImplicitFn.apply
+# monarch_attn = MonarchAttnImplicitFn.apply
 
 # def monarch_attn(Q, K, V, sm_scale, num_iters, eps):
 #     b, a, i, j, h, d = Q.shape
@@ -735,9 +735,6 @@ class CausalWanSelfAttention(nn.Module):
         self.max_attention_size = 32760 if local_attn_size == -1 else local_attn_size * 1560
 
         self.num_iters = int(os.getenv("MONARCH_ATTN_NUM_ITERS", "1"))
-        self.target_sparsity = os.getenv("MONARCH_ATTN_TARGET_SPARSITY")
-        if self.target_sparsity is not None:
-            self.target_sparsity = float(self.target_sparsity)
         self.use_initialize = bool(int(os.getenv("MONARCH_ATTN_USE_INITIALIZE", "0")))
         self.use_dense_init = bool(int(os.getenv("USE_DENSE_INIT", "0")))
         self.h_reduce = int(os.getenv("MONARCH_ATTN_H_REDUCE", "1"))
@@ -775,43 +772,6 @@ class CausalWanSelfAttention(nn.Module):
         self.o = nn.Linear(dim, dim)
         self.norm_q = WanRMSNorm(dim, eps=eps) if qk_norm else nn.Identity()
         self.norm_k = WanRMSNorm(dim, eps=eps) if qk_norm else nn.Identity()
-
-    def get_block_sizes(self, h, w, q_seq_len, k_seq_len):
-        q_frames = q_seq_len // (h * w)
-        k_frames = k_seq_len // (h * w)
-        cross_frame = 1 if self.use_framewise else q_frames
-        # regular factors test
-        if self.target_sparsity is None:
-            return (h, w)
-        if self.target_sparsity == 0.95:
-            if k_frames == q_frames and self.use_initialize:
-                return (h, w)
-            return (cross_frame * h, w)
-        if self.target_sparsity == 0.9:
-            return (cross_frame * h // 2, 2 * w)
-        if self.target_sparsity == 0.85:
-            assert w % self.w_reduce == 0
-            if k_frames == q_frames and self.use_initialize:
-                return (h, w // 2)
-            return (cross_frame * h, w // self.w_reduce)
-        elif self.target_sparsity == 0.75:
-            assert h % self.h_reduce == 0
-            if k_frames == q_frames and self.use_initialize:
-                return ((1, h // self.h_reduce), w)
-            return ((cross_frame, h // self.h_reduce), w)
-        else:
-            is_init = k_frames == q_frames
-            h_reduce = self.h_reduce if (not is_init or self.init_h_reduce is None) else self.init_h_reduce
-            w_reduce = self.w_reduce if (not is_init or self.init_w_reduce is None) else self.init_w_reduce
-            assert h % h_reduce == 0 and w % w_reduce == 0
-            if k_frames == q_frames and self.use_initialize:
-                return ((1, h // h_reduce), w // w_reduce)
-            return ((cross_frame, h // h_reduce), w // w_reduce)
-        # factors = [i for i in range(1, h + 1) if h % i == 0]
-        # sparsities = [1 - (f*f*w + w*w*f)/(f*f*w*w) for f in factors]
-        # dists = [abs(s - self.target_sparsity) for s in sparsities]
-        # min_idx = dists.index(min(dists))
-        # return (factors[min_idx], w)
 
     def forward(
         self,
@@ -925,27 +885,16 @@ class CausalWanSelfAttention(nn.Module):
                     )[:, :, :-padded_length].transpose(2, 1)
                 else:
                     b, _, h, d = roped_query.shape
-                    assert self.target_sparsity == 0.65
-                    h1, w1 = grid_sizes[0, 1].item(), grid_sizes[0, 2].item()
-                    block_b1, block_b2 = self.get_block_sizes(h1, w1, 4680, roped_key.size(1))
-                    f_per_set, block_b1 = block_b1
-                    def rearrange_fn(x):
-                        x = x.view(b, -1, f_per_set, h1 // block_b1, block_b1, w1 // block_b2, block_b2, h, d)
-                        return rearrange(x, 'b a f c i e j h d -> b (a c e) (f i) j h d')
-                    def return_fn(x):
-                        return rearrange(x, 'b (a c e) (f i) j h d -> b (a f c i e j) h d', c=h1 // block_b1, e=w1 // block_b2, f=f_per_set)
-                    out = []
-                    for i in range(0, roped_query.size(1), 4680):
-                        curr_q = roped_query[:, i:i+4680]
-                        curr_k = roped_key[:, :i+4680]
-                        curr_v = v[:, :i+4680]
-
-                        curr_q = rearrange_fn(curr_q)
-                        curr_k = rearrange_fn(curr_k)
-                        curr_v = rearrange_fn(curr_v)
-                        x = return_fn(monarch_attn(curr_q, curr_k, curr_v, d ** -0.5, self.num_iters, self.eps))
-                        out.append(x)
-                    x = torch.cat(out, dim=1)
+                    x = monarch_attn(
+                        roped_query,
+                        roped_key, v,
+                        1 if self.use_framewise else 3,
+                        self.h_reduce,
+                        self.w_reduce,
+                        30,
+                        52,
+                        block_causal_size=3*30*52,
+                    )
         else:
             frame_seqlen = math.prod(grid_sizes[0][1:]).item()
             current_start_frame = current_start // frame_seqlen
