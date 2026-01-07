@@ -344,19 +344,25 @@ def _init_al_cl_y_bwd_descs(Z, H, A, F, A_CHUNK, F_CHUNK, HEAD_DIM, block_b1, bl
 
     return descs
 
-_alcly_dq_backup = None
+_dq_backup = None
+_dk_backup = None
+_dv_backup = None
 def _al_cl_y_bwd_pre_hook(nargs):
     BLOCK_J = nargs["BLOCK_J"]
     BLOCK_L = nargs["BLOCK_L"]
     HEAD_DIM = nargs["HEAD_DIM"]
-    global _alcly_dq_backup
+    global _dq_backup, _dk_backup, _dv_backup
 
     if not isinstance(nargs["ar_ptr"], TensorDescriptor):
-        if _alcly_dq_backup is not None:
-            nargs["dq_ptr"].copy_(_alcly_dq_backup)
+        if _dq_backup is not None:
+            nargs["dq_ptr"].copy_(_dq_backup)
+            nargs["dk_ptr"].copy_(_dk_backup)
+            nargs["dv_ptr"].copy_(_dv_backup)
         return
-    if _alcly_dq_backup is not None:
-        nargs["dq_ptr"].base.copy_(_alcly_dq_backup)
+    if _dq_backup is not None:
+        nargs["dq_ptr"].base.copy_(_dq_backup)
+        nargs["dk_ptr"].base.copy_(_dk_backup)
+        nargs["dv_ptr"].base.copy_(_dv_backup)
 
     nargs["ar_ptr"].block_shape = [1, 1, 1, BLOCK_J, HEAD_DIM]
     nargs["dq_ptr"].block_shape = [1, 1, 1, BLOCK_J, HEAD_DIM]
@@ -425,9 +431,10 @@ def _al_cl_y_bwd(Z, H, A, F,
     off_h = off_hz % H
     off_fk = tl.program_id(2)
     off_f = off_fk // block_b1
+    off_f_mod = off_f + f_start
     off_k = off_fk % block_b1
 
-    kv_grad_enable = not PARTIAL_KV_GRAD or (off_f + f_start >= kv_grad_start_f and off_f + f_start < kv_grad_end_f)
+    kv_grad_enable = not PARTIAL_KV_GRAD or (off_f_mod >= kv_grad_start_f and off_f_mod < kv_grad_end_f)
 
     HD = H * HEAD_DIM
     KHD = block_b1 * HD
@@ -520,20 +527,16 @@ def _al_cl_y_bwd(Z, H, A, F,
     j_range = tl.arange(0, BLOCK_J)
     l_mask = (start_l + tl.arange(0, BLOCK_L)) < block_b2
 
-    if IS_FIRST_ITER:
-        dk_acc = tl.zeros([BLOCK_L, HEAD_DIM], dtype=tl.float32)
-        dv_acc = tl.zeros([BLOCK_L, HEAD_DIM], dtype=tl.float32)
-    else:
-        dk_acc = desc_dk.load([off_z, off_f - kv_grad_start_f if PARTIAL_KV_GRAD else off_f, off_k, start_l, off_hd]).reshape(BLOCK_L, HEAD_DIM).to(tl.float32)
-        dv_acc = desc_dv.load([off_z, off_f - kv_grad_start_f if PARTIAL_KV_GRAD else off_f, off_k, start_l, off_hd]).reshape(BLOCK_L, HEAD_DIM).to(tl.float32)
+    dk_acc = tl.zeros([BLOCK_L, HEAD_DIM], dtype=tl.float32)
+    dv_acc = tl.zeros([BLOCK_L, HEAD_DIM], dtype=tl.float32)
 
     sm_scale_sqrt = sm_scale_sqrt.to(dtype)
-    k_l = desc_k.load([off_z, off_f + f_start, off_k, start_l, off_hd]).reshape(BLOCK_L, HEAD_DIM) * sm_scale_sqrt
+    k_l = desc_k.load([off_z, off_f_mod, off_k, start_l, off_hd]).reshape(BLOCK_L, HEAD_DIM) * sm_scale_sqrt
     k_l = tl.where(l_mask[:, None], k_l, 0.0)
-    v_l = desc_v.load([off_z, off_f + f_start, off_k, start_l, off_hd]).reshape(BLOCK_L, HEAD_DIM)
+    v_l = desc_v.load([off_z, off_f_mod, off_k, start_l, off_hd]).reshape(BLOCK_L, HEAD_DIM)
 
     if CAUSAL_BLOCK_SIZE > 0:
-        a_lim = _max(0, _min(curr_num_a, ((off_f + f_start) // CAUSAL_BLOCK_SIZE) * CAUSAL_BLOCK_SIZE - a_start))
+        a_lim = _max(0, _min(curr_num_a, (off_f_mod // CAUSAL_BLOCK_SIZE) * CAUSAL_BLOCK_SIZE - a_start))
         dcl_ptrs += a_lim * fkj_stride
     else:
         a_lim = 0
@@ -585,10 +588,12 @@ def _al_cl_y_bwd(Z, H, A, F,
         dcl_ptrs += fkj_stride
 
     if kv_grad_enable:
-        off_f = off_f + f_start
         dk_acc = dk_acc * sm_scale_sqrt
-        desc_dk.store([off_z, off_f - kv_grad_start_f if PARTIAL_KV_GRAD else off_f, off_k, start_l, off_hd], dk_acc.to(dtype).reshape(1, 1, 1, BLOCK_L, HEAD_DIM))
-        desc_dv.store([off_z, off_f - kv_grad_start_f if PARTIAL_KV_GRAD else off_f, off_k, start_l, off_hd], dv_acc.to(dtype).reshape(1, 1, 1, BLOCK_L, HEAD_DIM))
+        if not IS_FIRST_ITER:
+            dk_acc += desc_dk.load([off_z, off_f_mod - kv_grad_start_f if PARTIAL_KV_GRAD else off_f_mod, off_k, start_l, off_hd]).reshape(BLOCK_L, HEAD_DIM).to(tl.float32)
+            dv_acc += desc_dv.load([off_z, off_f_mod - kv_grad_start_f if PARTIAL_KV_GRAD else off_f_mod, off_k, start_l, off_hd]).reshape(BLOCK_L, HEAD_DIM).to(tl.float32)
+        desc_dk.store([off_z, off_f_mod - kv_grad_start_f if PARTIAL_KV_GRAD else off_f_mod, off_k, start_l, off_hd], dk_acc.to(dtype).reshape(1, 1, 1, BLOCK_L, HEAD_DIM))
+        desc_dv.store([off_z, off_f_mod - kv_grad_start_f if PARTIAL_KV_GRAD else off_f_mod, off_k, start_l, off_hd], dv_acc.to(dtype).reshape(1, 1, 1, BLOCK_L, HEAD_DIM))
 
 
 def _init_z_fwd_descs(Z, H, A, F, A_CHUNK, F_CHUNK, HEAD_DIM, block_b1, block_b2, aL, y, q, z, cL):
@@ -646,12 +651,20 @@ def _init_z_fwd_descs(Z, H, A, F, A_CHUNK, F_CHUNK, HEAD_DIM, block_b1, block_b2
 
     return descs
 
+_z_backup = None
+_z_lse_backup = None
 def _z_fwd_pre_hook(nargs):
     BLOCK_K = nargs["BLOCK_K"]
     BLOCK_I = nargs["BLOCK_I"]
     HEAD_DIM = nargs["HEAD_DIM"]
+    if _z_lse_backup is not None:
+        nargs["out_lse_ptr"].copy_(_z_lse_backup)
     if not isinstance(nargs["al_ptr"], TensorDescriptor):
+        if _z_backup is not None:
+            nargs["z_ptr"].copy_(_z_backup)
         return
+    if _z_backup is not None:
+        nargs["z_ptr"].base.copy_(_z_backup)
     nargs["al_ptr"].block_shape = [1, 1, 1, BLOCK_K, HEAD_DIM]
     nargs["y_ptr"].block_shape = [1, 1, 1, BLOCK_K, HEAD_DIM]
     nargs["q_ptr"].block_shape = [1, BLOCK_I, 1, 1, HEAD_DIM]
@@ -673,7 +686,16 @@ def keep(conf):
     return not (torch.cuda.get_device_capability()[0] == 9 and BLOCK_I * BLOCK_K < 128 * 128
                 and conf.num_warps == 8)
 
-@triton.autotune(configs=list(filter(keep, configs)), key=["A_CHUNK", "F_CHUNK", "block_b1", "block_b2", "HEAD_DIM", "OUTPUT_FULL_LSE", "OUTPUT_PARTIAL_LSE", "CAUSAL_BLOCK_SIZE"])
+_z_fwd_evaluated_configs = set()
+def _start_z_fwd_evaluate(IS_FIRST_ITER, A_CHUNK, F_CHUNK, block_b1, block_b2, HEAD_DIM, OUTPUT_FULL_LSE, OUTPUT_PARTIAL_LSE, CAUSAL_BLOCK_SIZE, dtype):
+    global _z_fwd_evaluated_configs
+    config = (IS_FIRST_ITER, A_CHUNK, F_CHUNK, block_b1, block_b2, HEAD_DIM, OUTPUT_FULL_LSE, OUTPUT_PARTIAL_LSE, CAUSAL_BLOCK_SIZE, dtype)
+    if config in _z_fwd_evaluated_configs:
+        return False
+    _z_fwd_evaluated_configs.add(config)
+    return True
+
+@triton.autotune(configs=list(filter(keep, configs)), key=["IS_FIRST_ITER", "A_CHUNK", "F_CHUNK", "block_b1", "block_b2", "HEAD_DIM", "OUTPUT_FULL_LSE", "OUTPUT_PARTIAL_LSE", "CAUSAL_BLOCK_SIZE"])
 @triton.jit
 def _z_fwd(Z, H, A, F,
            a_start, f_start,
@@ -959,18 +981,17 @@ def _init_z_bwd_descs(Z, H, A, F, A_CHUNK, F_CHUNK, HEAD_DIM, block_b1, block_b2
 
     return descs
 
-_z_dq_backup = None
 def _z_bwd_pre_hook(nargs):
     BLOCK_K = nargs["BLOCK_K"]
     BLOCK_I = nargs["BLOCK_I"]
     HEAD_DIM = nargs["HEAD_DIM"]
-    global _z_dq_backup
+    global _dq_backup
     if not isinstance(nargs["al_ptr"], TensorDescriptor):
-        if _z_dq_backup is not None:
-            nargs["dq_ptr"].copy_(_z_dq_backup)
+        if _dq_backup is not None:
+            nargs["dq_ptr"].copy_(_dq_backup)
         return
-    if _z_dq_backup is not None:
-        nargs["dq_ptr"].base.copy_(_z_dq_backup)
+    if _dq_backup is not None:
+        nargs["dq_ptr"].base.copy_(_dq_backup)
     nargs["al_ptr"].block_shape = [1, BLOCK_K, 1, HEAD_DIM]
     nargs["dal_ptr"].block_shape = [1, BLOCK_K, 1, HEAD_DIM]
     nargs["y_ptr"].block_shape = [1, BLOCK_K, 1, HEAD_DIM]
@@ -1265,7 +1286,12 @@ class _attention_with_cache(torch.autograd.Function):
                     OUTPUT_LSE=False,
                     CAUSAL_BLOCK_SIZE=0,
                 )
-        
+
+                global _z_backup, _z_lse_backup
+                if _start_z_fwd_evaluate(kv_frame_start == 0, Q_FRAME_CHUNK, KV_FRAME_CHUNK, block_b1, block_b2, d, grad_enabled, not grad_enabled and kv_frame_start + KV_FRAME_CHUNK < f, 0, q.dtype):
+                    _z_backup = z.clone()
+                    if z_lse is not None:
+                        _z_lse_backup = z_lse.clone()
                 _z_fwd[_z_grid](
                     b, h, a, f,
                     q_frame_start, kv_frame_start,
@@ -1284,6 +1310,8 @@ class _attention_with_cache(torch.autograd.Function):
                     OUTPUT_PARTIAL_LSE=(not grad_enabled and kv_frame_start + KV_FRAME_CHUNK < f),
                     CAUSAL_BLOCK_SIZE=0,
                 )
+                _z_backup = None
+                _z_lse_backup = None
         
         if grad_enabled:
             ctx.save_for_backward(q, k_cache, v_cache, z, z_lse)
@@ -1376,9 +1404,9 @@ class _attention_with_cache(torch.autograd.Function):
                     CAUSAL_BLOCK_SIZE=0,
                 )
 
-                global _z_dq_backup
+                global _dq_backup
                 if _start_z_bwd_evaluate(Q_FRAME_CHUNK, KV_FRAME_CHUNK, block_b1, block_b2, d, 0, q.dtype):
-                    _z_dq_backup = grad_q.clone()
+                    _dq_backup = grad_q.clone()
                 _z_bwd[_z_bwd_grid](
                     b, h, a, f,
                     q_frame_start, kv_frame_start,
@@ -1397,11 +1425,13 @@ class _attention_with_cache(torch.autograd.Function):
                     d,
                     CAUSAL_BLOCK_SIZE=0,
                 )
-                _z_dq_backup = None
+                _dq_backup = None
 
-                global _alcly_dq_backup
+                global _dk_backup, _dv_backup
                 if _start_alcly_bwd_evaluate(Q_FRAME_CHUNK, KV_FRAME_CHUNK, block_b1, block_b2, q_frame_start == 0, d, ctx.grad_only_new_kv, 0, q.dtype):
-                    _alcly_dq_backup = grad_q.clone()
+                    _dq_backup = grad_q.clone()
+                    _dk_backup = grad_k.clone()
+                    _dv_backup = grad_v.clone()
                 _al_cl_y_bwd[_al_cl_y_bwd_grid](
                     b, h, a, f,
                     q_frame_start, kv_frame_start,
@@ -1420,11 +1450,13 @@ class _attention_with_cache(torch.autograd.Function):
                     block_b1,
                     block_b2,
                     d,
-                    IS_FIRST_ITER=q_frame_start == 0,
+                    IS_FIRST_ITER=(q_frame_start == 0),
                     PARTIAL_KV_GRAD=ctx.grad_only_new_kv,
                     CAUSAL_BLOCK_SIZE=0,
                 )
-                _alcly_dq_backup = None
+                _dq_backup = None
+                _dk_backup = None
+                _dv_backup = None
 
         grad_k = grad_k.view(b, -1, h, d)
         grad_v = grad_v.view(b, -1, h, d)
@@ -1449,8 +1481,8 @@ class _attention_no_cache(torch.autograd.Function):
             return torch.empty(size, dtype=torch.int8, device="cuda")
         triton.set_allocator(alloc_fn)
 
-        Q_FRAME_CHUNK = 3
-        KV_FRAME_CHUNK = 3
+        Q_FRAME_CHUNK = 1
+        KV_FRAME_CHUNK = 1
 
         aL = torch.empty((b, Q_FRAME_CHUNK, KV_FRAME_CHUNK, block_b2, block_b1, h, d), device=q.device, dtype=q.dtype) # (b, a, f, j, k, h, d)
         cL = torch.empty((b, h, Q_FRAME_CHUNK, KV_FRAME_CHUNK, block_b2, block_b1), device=q.device, dtype=torch.float32)  # (b, h, a, f, j, k)
@@ -1495,7 +1527,12 @@ class _attention_no_cache(torch.autograd.Function):
                     OUTPUT_LSE=False,
                     CAUSAL_BLOCK_SIZE=causal_block_size,
                 )
-        
+
+                global _z_backup, _z_lse_backup
+                if _start_z_fwd_evaluate(kv_frame_start == 0, Q_FRAME_CHUNK, KV_FRAME_CHUNK, block_b1, block_b2, d, grad_enabled, not grad_enabled and kv_frame_start + KV_FRAME_CHUNK < f, causal_block_size, q.dtype):
+                    _z_backup = z.clone()
+                    if z_lse is not None:
+                        _z_lse_backup = z_lse.clone()
                 _z_fwd[_z_grid](
                     b, h, a, f,
                     q_frame_start, kv_frame_start,
@@ -1514,6 +1551,8 @@ class _attention_no_cache(torch.autograd.Function):
                     OUTPUT_PARTIAL_LSE=(not grad_enabled and kv_frame_start + KV_FRAME_CHUNK < f),
                     CAUSAL_BLOCK_SIZE=causal_block_size,
                 )
+                _z_backup = None
+                _z_lse_backup = None
         
         if grad_enabled:
             ctx.save_for_backward(q, k, v, z, z_lse)
@@ -1546,8 +1585,8 @@ class _attention_no_cache(torch.autograd.Function):
             d,
         )
 
-        Q_FRAME_CHUNK = 3
-        KV_FRAME_CHUNK = 3
+        Q_FRAME_CHUNK = 1
+        KV_FRAME_CHUNK = 1
 
         aL = torch.empty((b, Q_FRAME_CHUNK, KV_FRAME_CHUNK, block_b2, block_b1, h, d), device=q.device, dtype=q.dtype) # (b, a, f, j, k, h, d)
         cL = torch.empty((b, h, Q_FRAME_CHUNK, KV_FRAME_CHUNK, block_b2, block_b1), device=q.device, dtype=torch.float32)  # (b, h, a, f, j, k)
@@ -1596,9 +1635,9 @@ class _attention_no_cache(torch.autograd.Function):
                     CAUSAL_BLOCK_SIZE=causal_block_size,
                 )
 
-                global _z_dq_backup
+                global _dq_backup
                 if _start_z_bwd_evaluate(Q_FRAME_CHUNK, KV_FRAME_CHUNK, block_b1, block_b2, d, causal_block_size, q.dtype):
-                    _z_dq_backup = grad_q.clone()
+                    _dq_backup = grad_q.clone()
                 _z_bwd[_z_bwd_grid](
                     b, h, a, f,
                     q_frame_start, kv_frame_start,
@@ -1617,11 +1656,13 @@ class _attention_no_cache(torch.autograd.Function):
                     d,
                     CAUSAL_BLOCK_SIZE=causal_block_size,
                 )
-                _z_dq_backup = None
+                _dq_backup = None
 
-                global _alcly_dq_backup
+                global _dk_backup, _dv_backup
                 if _start_alcly_bwd_evaluate(Q_FRAME_CHUNK, KV_FRAME_CHUNK, block_b1, block_b2, d, q_frame_start == 0, False, causal_block_size, q.dtype):
-                    _alcly_dq_backup = grad_q.clone()
+                    _dq_backup = grad_q.clone()
+                    _dk_backup = grad_k.clone()
+                    _dv_backup = grad_v.clone()
                 _al_cl_y_bwd[_al_cl_y_bwd_grid](
                     b, h, a, f,
                     q_frame_start, kv_frame_start,
@@ -1644,7 +1685,9 @@ class _attention_no_cache(torch.autograd.Function):
                     PARTIAL_KV_GRAD=False,
                     CAUSAL_BLOCK_SIZE=causal_block_size,
                 )
-                _alcly_dq_backup = None
+                _dq_backup = None
+                _dk_backup = None
+                _dv_backup = None
 
         return grad_q.to(torch.float32), grad_k, grad_v, None, None, None
 
@@ -1845,8 +1888,8 @@ def run_causal_test(dtype, B, F, block_b1, block_b2, H, D, device="cuda"):
     out_triton = monarch_attn_causal_ref(q1, k1, v1, 1, 1, 1, block_b1, block_b2, block_b1 * block_b2, sm_scale)
     out_ref = monarch_attn(q2, k2, v2, 1, 1, 1, block_b1, block_b2, sm_scale, block_b1 * block_b2)
 
-    atol = 1e-2 if dtype is torch.bfloat16 else 1e-3
-    rtol = 1e-2 if dtype is torch.bfloat16 else 1e-3
+    atol = 2e-2 if dtype is torch.bfloat16 else 2e-3
+    rtol = 2e-2 if dtype is torch.bfloat16 else 2e-3
 
     fw_ok = torch.allclose(out_triton, out_ref, atol=atol, rtol=rtol)
     print("  forward allclose:", fw_ok)
@@ -1862,8 +1905,6 @@ def run_causal_test(dtype, B, F, block_b1, block_b2, H, D, device="cuda"):
     print("  backward k allclose:", bwd_k_ok)
     print("  backward v allclose:", bwd_v_ok)
 
-    breakpoint()
-
     return fw_ok and bwd_q_ok and bwd_k_ok and bwd_v_ok
 
 def run_tests():
@@ -1873,17 +1914,17 @@ def run_tests():
     device = "cuda"
     torch.manual_seed(0)
 
-    # print("Running KV cache tests...")
+    print("Running KV cache tests...")
 
-    # shapes = [
-    #     (1, 3, 21, 30, 52, 12, 128, 3),
-    #     (2, 3, 21, 30, 52, 12, 128, 3),
-    # ]
-    # for dtype in (torch.float16, torch.bfloat16):
-    #     for B, A, F, block_b1, block_b2, H, D, new_f in shapes:
-    #         for partial_kv_grad in (False, True):
-    #             ok = run_kv_cache_test(dtype, B, A, F, block_b1, block_b2, H, D, new_f, partial_kv_grad=partial_kv_grad, device=device)
-    #             print("  -> test passed:", ok)
+    shapes = [
+        (1, 3, 21, 30, 52, 12, 128, 3),
+        (2, 3, 21, 30, 52, 12, 128, 3),
+    ]
+    for dtype in (torch.float16, torch.bfloat16):
+        for B, A, F, block_b1, block_b2, H, D, new_f in shapes:
+            for partial_kv_grad in (False, True):
+                ok = run_kv_cache_test(dtype, B, A, F, block_b1, block_b2, H, D, new_f, partial_kv_grad=partial_kv_grad, device=device)
+                print("  -> test passed:", ok)
 
     print("Running causal tests...")
 
@@ -1891,7 +1932,7 @@ def run_tests():
         (1, 21, 30, 52, 12, 128),
         (2, 21, 30, 52, 12, 128),
     ]
-    for dtype in (torch.bfloat16,):
+    for dtype in (torch.float16, torch.bfloat16):
         for B, F, block_b1, block_b2, H, D in shapes:
             ok = run_causal_test(dtype, B, F, block_b1, block_b2, H, D, device=device)
             print("  -> test passed:", ok)

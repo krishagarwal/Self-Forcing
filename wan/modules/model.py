@@ -12,6 +12,7 @@ from .attention import flash_attention
 from .sparse_videogen.attention import sparse_attention, Wan_SparseAttn, prepare_flexattention, prepare_dense_attention
 from .sparse_videogen.utils import get_attention_mask, sparsity_to_width
 from .radial_attn.attn_mask import MaskMap, RadialAttention
+from .monarch_attn import monarch_attn
 
 __all__ = ['WanModel']
 
@@ -108,7 +109,7 @@ class MonarchAttnImplicitFn(torch.autograd.Function):
 
             out = torch.einsum("bhafjki,bafjkhd->baijhd", L, Y)
             return out
-        
+
         _, (grad_Q, grad_K, grad_V) = torch.autograd.functional.vjp(O_from_QKV, (Q, K, V), v=grad_out, create_graph=False, strict=True)
         grad_Q = grad_Q * ctx.sm_scale_sqrt
         grad_K = grad_K * ctx.sm_scale_sqrt
@@ -396,7 +397,7 @@ class MonarchAttnImplicitFn(torch.autograd.Function):
 
 #         return grad_Q, grad_K, grad_V, None, None, None
 
-monarch_attn = MonarchAttnImplicitFn.apply
+# monarch_attn = MonarchAttnImplicitFn.apply
 
 def sinusoidal_embedding_1d(dim, position):
     # preprocess
@@ -503,15 +504,16 @@ class WanSelfAttention(nn.Module):
         self.qk_norm = qk_norm
         self.eps = eps
 
-        self.min_block_size = int(os.getenv("MONARCH_ATTN_MIN_BLOCK_SIZE", "1"))
-        self.target_sparsity = os.getenv("MONARCH_ATTN_TARGET_SPARSITY")
-        if self.target_sparsity is not None:
-            self.target_sparsity = float(self.target_sparsity)
         self.num_iters = int(os.getenv("MONARCH_ATTN_NUM_ITERS", "1"))
+        self.h_reduce = int(os.getenv("MONARCH_ATTN_H_REDUCE", "1"))
+        self.w_reduce = int(os.getenv("MONARCH_ATTN_W_REDUCE", "1"))
+        self.f_tied = int(os.getenv("MONARCH_ATTN_F_TIED", "1"))
         self.disable_monarch = bool(int(os.getenv("DISABLE_MONARCH_ATTN", "0")))
-        self.use_hacks = bool(int(os.getenv("USE_HACKS", "0")))
-        self.topk = float(os.getenv("ATTN_TOPK_PCT", "0.0"))
         layer_disable_list = os.getenv("MONARCH_ATTN_DISABLE_LAYERS")
+        self.use_hacks = bool(int(os.getenv("USE_HACKS", "0")))
+        self.topk = os.getenv("ATTN_TOPK_PCT")
+        if self.topk is not None:
+            self.topk = float(self.topk)
         if layer_disable_list is not None:
             assert block_num is not None
             layer_disable_list = [int(x) for x in layer_disable_list.split(",")]
@@ -530,32 +532,6 @@ class WanSelfAttention(nn.Module):
         self.o = nn.Linear(dim, dim)
         self.norm_q = WanRMSNorm(dim, eps=eps) if qk_norm else nn.Identity()
         self.norm_k = WanRMSNorm(dim, eps=eps) if qk_norm else nn.Identity()
-
-    def get_block_sizes(self, seq_len, h, w):
-        if self.target_sparsity is None:
-            # one set of factors
-            return (seq_len // w, w)
-        elif self.target_sparsity == 0.95:
-            # 3 frames per set of factors
-            assert (seq_len // (h * w)) % 3 == 0
-            return (3 * h, w)
-        elif self.target_sparsity == 0.85:
-            # full cross frame, reduced sparsity along w
-            assert w % 2 == 0
-            return (seq_len // w, w // 2)
-        else:
-            # full cross frame, reduced sparsity along h
-            assert h % 2 == 0
-            return ((seq_len // (h * w), h // 2), w)
-        # seqlen_b1 = seq_len // w
-        # if self.target_sparsity is None:
-        #     return (seqlen_b1, w) # max sparsity
-        # factors = [i for i in range(self.min_block_size, seqlen_b1 + 1) if seqlen_b1 % i == 0]
-        # assert len(factors) > 0, f"Cannot find usable block sizes with min block size {self.min_block_size}"
-        # sparsities = [1 - (f*f*w + w*w*f)/(f*f*w*w) for f in factors]
-        # dists = [abs(s - self.target_sparsity) for s in sparsities]
-        # min_idx = dists.index(min(dists))
-        # return (factors[min_idx], w)
 
     def forward(self, x, seq_lens, grid_sizes, freqs, timestep=None):
         r"""
@@ -579,7 +555,7 @@ class WanSelfAttention(nn.Module):
         roped_key = rope_apply(k, grid_sizes, freqs)
 
         if self.disable_monarch and not self.use_svg and not self.use_radial_attn:
-            if self.topk != 0.0:
+            if self.topk is not None:
                 x_all = []
                 s = roped_query.size(1)
                 num_chunks = 16
@@ -680,60 +656,9 @@ class WanSelfAttention(nn.Module):
                 x = rearrange(x, 'b s (h d) -> b s h d', d=d)
                 assert x.shape == roped_query.shape
         else:
-            h1, w1 = grid_sizes[0, 1].item(), grid_sizes[0, 2].item()
-            block_b1, block_b2 = self.get_block_sizes(q.size(1), h1, w1)
-            b, s, h, d = q.shape
-            # q = q.view(b, -1, block_b1, block_b2, h, d)
-            # k = k.view(b, -1, block_b1, block_b2, h, d)
-            # v = v.view(b, -1, block_b1, block_b2, h, d)
-            # x = monarch_attn(q, k, v, d ** -0.5, self.num_iters, self.eps).reshape(b, s, h, d)
-
-            if self.target_sparsity is None or self.target_sparsity == 0.95:
-                def rearrange_fn(x):
-                    return x.view(b, -1, block_b1, block_b2, h, d)
-                def return_fn(x):
-                    return x.reshape(b, s, h, d)
-            elif self.target_sparsity == 0.85:
-                # 3 frames per set of factors, reduced sparsity along w
-                def rearrange_fn(x):
-                    x = x.view(b, -1, block_b1, w1 // block_b2, block_b2, h, d)
-                    return rearrange(x, 'b a i c j h d -> b (a c) i j h d')
-                def return_fn(x):
-                    return rearrange(x, 'b (a c) i j h d -> b (a i c j) h d', c=(w1 // block_b2))
-            elif self.target_sparsity == 0.75:
-                f_per_set, block_b1 = block_b1
-                # 3 frames per set of factors, reduced sparsity along w
-                def rearrange_fn(x):
-                    x = x.view(b, -1, f_per_set, h1 // block_b1, block_b1, block_b2, h, d)
-                    return rearrange(x, 'b a f c i j h d -> b (a c) (f i) j h d')
-                def return_fn(x):
-                    return rearrange(x, 'b (a c) (f i) j h d -> b (a f c i j) h d', c=h1 // block_b1, f=f_per_set)
-            elif self.target_sparsity == 0.65:
-                f_per_set, block_b1, block_b2 = 3, h1 // 2, w1
-                def rearrange_fn(x):
-                    x = x.view(b, -1, f_per_set, h1 // block_b1, block_b1, w1 // block_b2, block_b2, h, d)
-                    return rearrange(x, 'b a f c i e j h d -> b (a c e) (f i) j h d')
-                def return_fn(x):
-                    return rearrange(x, 'b (a c e) (f i) j h d -> b (a f c i e j) h d', c=h1 // block_b1, e=w1 // block_b2, f=f_per_set)
-            elif self.target_sparsity == 0.55:
-                f_per_set, block_b1, block_b2 = 3, h1 // 6, w1 // 2
-                def rearrange_fn(x):
-                    x = x.view(b, -1, f_per_set, h1 // block_b1, block_b1, w1 // block_b2, block_b2, h, d)
-                    return rearrange(x, 'b a f c i e j h d -> b (a c e) (f i) j h d')
-                def return_fn(x):
-                    return rearrange(x, 'b (a c e) (f i) j h d -> b (a f c i e j) h d', c=h1 // block_b1, e=w1 // block_b2, f=f_per_set)
-            elif self.target_sparsity == 0.45:
-                f_per_set, block_b1, block_b2 = 3, h1, w1
-                def rearrange_fn(x):
-                    x = x.view(b, -1, f_per_set, h1 // block_b1, block_b1, w1 // block_b2, block_b2, h, d)
-                    return rearrange(x, 'b a f c i e j h d -> b (a c e) (f i) j h d')
-                def return_fn(x):
-                    return rearrange(x, 'b (a c e) (f i) j h d -> b (a f c i e j) h d', c=h1 // block_b1, e=w1 // block_b2, f=f_per_set)
-
-            roped_query = rearrange_fn(roped_query)
-            roped_key = rearrange_fn(roped_key)
-            v = rearrange_fn(v)
-            x = return_fn(monarch_attn(roped_query, roped_key, v, d ** -0.5, self.num_iters, self.eps))
+            h, w = grid_sizes[0, 1].item(), grid_sizes[0, 2].item()
+            b, s, _, d = q.shape
+            x = monarch_attn(roped_query, k, v, self.f_tied, self.h_reduce, self.w_reduce, h, w)
 
         # output
         x = x.flatten(2)
