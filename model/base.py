@@ -4,7 +4,7 @@ from torch import nn
 import torch.distributed as dist
 import torch
 
-from pipeline import SelfForcingTrainingPipeline
+from pipeline import SelfForcingTrainingPipeline, BidirectionalTrainingPipeline
 from utils.loss import get_denoising_loss
 from utils.wan_wrapper import WanDiffusionWrapper, WanTextEncoder, WanVAEWrapper
 import os
@@ -28,7 +28,7 @@ class BaseModel(nn.Module):
         self.real_model_name = getattr(args, "real_name", "Wan2.1-T2V-1.3B")
         self.fake_model_name = getattr(args, "fake_name", "Wan2.1-T2V-1.3B")
 
-        self.generator = WanDiffusionWrapper(**getattr(args, "model_kwargs", {}), is_causal=True)
+        self.generator = WanDiffusionWrapper(**getattr(args, "model_kwargs", {}), is_causal=getattr(args, "causal", False))
         self.generator.model.requires_grad_(True)
 
         patch_dict = {"DISABLE_MONARCH_ATTN": "1"} if not getattr(args, "use_monarch_base", False) else {}
@@ -102,6 +102,7 @@ class BaseModel(nn.Module):
 class SelfForcingModel(BaseModel):
     def __init__(self, args, device):
         super().__init__(args, device)
+        self.causal = getattr(args, "causal", False)
         self.denoising_loss_func = get_denoising_loss(args.denoising_loss_type)()
 
     def _run_generator(
@@ -213,14 +214,24 @@ class SelfForcingModel(BaseModel):
         Here we encapsulate the inference code with a model-dependent outside function.
         We pass our FSDP-wrapped modules into the pipeline to save memory.
         """
-        self.inference_pipeline = SelfForcingTrainingPipeline(
-            denoising_step_list=self.denoising_step_list,
-            scheduler=self.scheduler,
-            generator=self.generator,
-            num_frame_per_block=self.num_frame_per_block,
-            independent_first_frame=self.args.independent_first_frame,
-            same_step_across_blocks=self.args.same_step_across_blocks,
-            last_step_only=self.args.last_step_only,
-            num_max_frames=self.num_training_frames,
-            context_noise=self.args.context_noise
-        )
+        if self.causal:
+            self.inference_pipeline = SelfForcingTrainingPipeline(
+                denoising_step_list=self.denoising_step_list,
+                scheduler=self.scheduler,
+                generator=self.generator,
+                num_frame_per_block=self.num_frame_per_block,
+                independent_first_frame=self.args.independent_first_frame,
+                same_step_across_blocks=self.args.same_step_across_blocks,
+                last_step_only=self.args.last_step_only,
+                num_max_frames=self.num_training_frames,
+                context_noise=self.args.context_noise
+            )
+        else:
+            self.inference_pipeline = BidirectionalTrainingPipeline(
+                denoising_step_list=self.denoising_step_list,
+                scheduler=self.scheduler,
+                generator=self.generator,
+                independent_first_frame=self.args.independent_first_frame,
+                last_step_only=self.args.last_step_only,
+                context_noise=self.args.context_noise
+            )
