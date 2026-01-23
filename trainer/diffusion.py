@@ -21,6 +21,7 @@ from torchvision.io import write_video
 from pipeline import CausalInferencePipeline, CausalDiffusionInferencePipeline, BidirectionalInferencePipeline, BidirectionalDiffusionInferencePipeline
 from torch.distributed.fsdp import ShardingStrategy
 import torch.distributed.checkpoint as dist_cp
+from torch.distributed.checkpoint.format_utils import dcp_to_torch_save
 from torch.distributed.checkpoint.state_dict import get_model_state_dict, StateDictOptions
 from torch.distributed.device_mesh import init_device_mesh
 
@@ -46,7 +47,6 @@ class Trainer:
         self.is_main_process = self.global_rank == 0
         self.causal = config.causal
         self.disable_wandb = config.disable_wandb
-        self.is_test = getattr(config, "is_test", False)
 
         # use a random seed for the training
         if config.seed == 0:
@@ -92,6 +92,7 @@ class Trainer:
                 mixed_precision=config.mixed_precision,
                 wrap_strategy=config.generator_fsdp_wrap_strategy,
                 device_mesh=self.device_mesh,
+                cpu_offload=getattr(config, "cpu_offload_all", False),
             ) # requires same exact FSDP config as generator
             self.generator_ema = EMA_FSDP(ema_model, decay=ema_weight)
 
@@ -101,6 +102,7 @@ class Trainer:
             mixed_precision=config.mixed_precision,
             wrap_strategy=config.generator_fsdp_wrap_strategy,
             device_mesh=self.device_mesh,
+            cpu_offload=getattr(config, "cpu_offload_all", False),
         )
 
         self.model.text_encoder = fsdp_wrap(
@@ -109,6 +111,7 @@ class Trainer:
             mixed_precision=config.mixed_precision,
             wrap_strategy=config.text_encoder_fsdp_wrap_strategy,
             device_mesh=self.device_mesh,
+            cpu_offload=getattr(config, "text_encoder_cpu_offload", False) or getattr(config, "cpu_offload_all", False),
         )
 
         if not config.no_visualize or config.load_raw_video:
@@ -147,13 +150,6 @@ class Trainer:
             .replace("_checkpoint_wrapped_module.", "")
             .replace("_orig_mod.", "")
         )
-        self.name_to_trainable_params = {}
-        for n, p in self.model.generator.named_parameters():
-            if not p.requires_grad:
-                continue
-
-            renamed_n = rename_param(n)
-            self.name_to_trainable_params[renamed_n] = p
 
         checkpoint_folders = glob.glob(os.path.join(self.output_path, "checkpoint_model_*"))
         if False:#len(checkpoint_folders) > 0:
@@ -168,6 +164,12 @@ class Trainer:
 
         ##############################################################################################################
         # 7. (If resuming) Load the model and optimizer, lr_scheduler, ema's statedicts
+        if hasattr(config, "convert_dist_cp") and config.convert_dist_cp is not None and not os.path.exists(checkpoint_path):
+            if self.is_main_process:
+                print(f"Converting DCP checkpoint from {config.convert_dist_cp}...")
+                dcp_to_torch_save(config.convert_dist_cp, checkpoint_path)
+            barrier()
+
         if checkpoint_path is not None:
             print(f"Loading pretrained generator from {checkpoint_path}")
             if os.path.isdir(checkpoint_path):
@@ -375,7 +377,7 @@ class Trainer:
     #         )
     #     if self.is_main_process:
     #         print("Checkpoint saved (sharded) at", ckpt_dir)
-    
+
     def save(self):
         ckpt_dir = os.path.join(self.output_path, f"checkpoint_model_{self.step:06d}")
         os.makedirs(ckpt_dir, exist_ok=True)
@@ -510,7 +512,7 @@ class Trainer:
         if self.generator_ema is None:
             yield False
             return
-        
+
         backup = self.model.generator
         self.model.generator = self.generator_ema.ema_model
 
@@ -643,18 +645,17 @@ class Trainer:
         start_step = self.step
 
         while self.step <= 1000 and not self.inference_only:
-            if self.step % 100 == 0 and not (self.disable_wandb or self.val_prompts is None or self.is_test):
+            if self.step % 100 == 0 and not (self.disable_wandb or self.val_prompts is None):
                 self.run_validation()
-                if self.generator_ema is not None:
+                if self.generator_ema is not None and self.step > self.config.ema_start_step:
                     with self.use_generator_ema():
                         self.run_validation("validation_videos_ema")
-            
-            if not self.is_test:
-                batch = next(self.dataloader)
-                self.train_one_step(batch)
-            if self.is_test or ((not self.config.no_save) and (self.step - start_step) > 0 and self.step % self.config.log_iters == 0):
+
+            batch = next(self.dataloader)
+            self.train_one_step(batch)
+            if (not self.config.no_save) and (self.step - start_step) > 0 and self.step % self.config.log_iters == 0:
                 torch.cuda.empty_cache()
-                if self.is_test or self.step == 1000:
+                if self.step == 1000:
                     self.save()
                     torch.cuda.empty_cache()
 
@@ -667,12 +668,9 @@ class Trainer:
                     if not self.disable_wandb:
                         wandb.log({"per iteration time": current_time - self.previous_time}, step=self.step)
                     self.previous_time = current_time
-            
-            if self.is_test:
-                break
 
         if self.benchmark_prompts is not None:
-            if self.generator_ema is not None:
+            if self.generator_ema is not None and self.step > self.config.ema_start_step:
                 os.makedirs("/workspace/vbench_videos_ema", exist_ok=True)
                 with self.use_generator_ema():
                     filename_fn = lambda step, i, sample_num, prompt: f"/workspace/vbench_videos_ema/{prompt}-{sample_num}.mp4"

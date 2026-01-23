@@ -92,11 +92,11 @@ def pad_qkv(input_tensor, block_size=128):
     
     return padded_tensor
 
-def get_diagonal_split_mask(i, j, token_per_frame, sparse_type, query):
+def get_diagonal_split_mask(i, j, token_per_frame, sparse_type, query, block_size=128):
     assert(sparse_type in ["radial"])
     dist = abs(i - j)
     group = dist.bit_length()
-    threshold = 128 # hardcoded threshold for now, which is equal to block-size
+    threshold = block_size # hardcoded threshold for now, which is equal to block-size
     decay_length = 2 ** token_per_frame.bit_length() / 2 ** group
     if decay_length >= threshold:
         return torch.ones((token_per_frame, token_per_frame), device=query.device, dtype=torch.bool)
@@ -150,7 +150,7 @@ def gen_log_mask_shrinked(query, s, video_token_num, num_frame, block_size=128, 
             else:
                 window_width = get_window_width(i, j, token_per_frame, sparse_type, num_frame, decay_factor=decay_factor, block_size=block_size, model_type=model_type)
                 local_mask = torch.abs(col_indices - row_indices) <= window_width
-                split_mask = get_diagonal_split_mask(i, j, token_per_frame, sparse_type, query)
+                split_mask = get_diagonal_split_mask(i, j, token_per_frame, sparse_type, query, block_size=block_size)
                 local_mask = torch.logical_and(local_mask, split_mask)
 
             remainder_row = (i * token_per_frame) % block_size

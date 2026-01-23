@@ -675,7 +675,7 @@ def _z_fwd_pre_hook(nargs):
 configs = [
     triton.Config({'BLOCK_I': BI, 'BLOCK_K': BK}, num_stages=s, num_warps=w, pre_hook=_z_fwd_pre_hook) \
     for BI in [16, 32, 64, 128]\
-    for BK in [32, 64, 128]\
+    for BK in [16, 32, 64, 128]\
     for s in [2, 3, 4] \
     for w in [4, 8]\
 ]

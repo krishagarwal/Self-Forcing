@@ -118,4 +118,7 @@
 # kubectl apply -f yaml/run_monarch_14b_from_regular.yaml
 # kubectl apply -f yaml/run_regular_14b_test.yaml
 
-kubectl apply -f yaml/run_wan_fewstep_dmd.yaml
+# kubectl apply -f yaml/run_wan_fewstep_dmd.yaml
+kubectl apply -f yaml/run_wan_fewstep_inference_monarch_fast_framewise.yaml
+kubectl apply -f yaml/run_wan_fewstep_inference_radial_attn.yaml
+kubectl apply -f yaml/run_wan_fewstep_inference_topk.yaml
