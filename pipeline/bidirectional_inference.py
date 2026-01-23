@@ -30,7 +30,7 @@ class BidirectionalInferencePipeline(torch.nn.Module):
             timesteps = torch.cat((self.scheduler.timesteps.cpu(), torch.tensor([0], dtype=torch.float32)))
             self.denoising_step_list = timesteps[1000 - self.denoising_step_list]
 
-    def inference(self, noise: torch.Tensor, text_prompts: List[str], return_latents=False) -> torch.Tensor:
+    def inference(self, noise: torch.Tensor, text_prompts: List[str], initial_latent=None, return_latents=False) -> torch.Tensor:
         """
         Perform inference on the given noise and text prompts.
         Inputs:
@@ -41,6 +41,7 @@ class BidirectionalInferencePipeline(torch.nn.Module):
             video (torch.Tensor): The generated video tensor of shape
                 (batch_size, num_frames, num_channels, height, width). It is normalized to be in the range [0, 1].
         """
+        assert initial_latent is None, "Initial latent is not supported in bidirectional inference"
         conditional_dict = self.text_encoder(
             text_prompts=text_prompts
         )
