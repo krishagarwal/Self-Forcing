@@ -30,7 +30,7 @@ class BidirectionalInferencePipeline(torch.nn.Module):
             timesteps = torch.cat((self.scheduler.timesteps.cpu(), torch.tensor([0], dtype=torch.float32)))
             self.denoising_step_list = timesteps[1000 - self.denoising_step_list]
 
-    def inference(self, noise: torch.Tensor, text_prompts: List[str]) -> torch.Tensor:
+    def inference(self, noise: torch.Tensor, text_prompts: List[str], return_latents=False) -> torch.Tensor:
         """
         Perform inference on the given noise and text prompts.
         Inputs:
@@ -68,4 +68,8 @@ class BidirectionalInferencePipeline(torch.nn.Module):
 
         video = self.vae.decode_to_pixel(pred_image_or_video)
         video = (video * 0.5 + 0.5).clamp(0, 1)
-        return video
+
+        if return_latents:
+            return video, pred_image_or_video
+        else:
+            return video
