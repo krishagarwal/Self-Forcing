@@ -73,14 +73,20 @@ def wan_sparse_head_placement_kernel(
     if is_temporal:
         frame_id = offset_token // frame_size
         patch_id = offset_token - frame_id * frame_size
-        offset_store_token = tl.where(offset_token >= seq_len - context_length, offset_token, patch_id * num_frame + frame_id)
+        offset_store_token = tl.where(
+            offset_token >= seq_len - context_length, offset_token, patch_id * num_frame + frame_id
+        )
 
-        offset_load = (cfg * query_stride_b + head * query_stride_h + offset_token[:, None] * query_stride_s) + offset_d[None, :] * query_stride_d
+        offset_load = (
+            cfg * query_stride_b + head * query_stride_h + offset_token[:, None] * query_stride_s
+        ) + offset_d[None, :] * query_stride_d
         offset_query = query_ptr + offset_load
         offset_key = key_ptr + offset_load
         offset_value = value_ptr + offset_load
 
-        offset_store = (cfg * query_stride_b + head * query_stride_h + offset_store_token[:, None] * query_stride_s) + offset_d[None, :] * query_stride_d
+        offset_store = (
+            cfg * query_stride_b + head * query_stride_h + offset_store_token[:, None] * query_stride_s
+        ) + offset_d[None, :] * query_stride_d
         offset_query_out = query_out_ptr + offset_store
         offset_key_out = key_out_ptr + offset_store
         offset_value_out = value_out_ptr + offset_store
@@ -94,7 +100,9 @@ def wan_sparse_head_placement_kernel(
         tl.store(offset_value_out, value, mask=offset_mask[:, None])
 
     else:
-        offset_load = (cfg * query_stride_b + head * query_stride_h + offset_token[:, None] * query_stride_s) + offset_d[None, :] * query_stride_d
+        offset_load = (
+            cfg * query_stride_b + head * query_stride_h + offset_token[:, None] * query_stride_s
+        ) + offset_d[None, :] * query_stride_d
         offset_query = query_ptr + offset_load
         offset_key = key_ptr + offset_load
         offset_value = value_ptr + offset_load
@@ -113,7 +121,9 @@ def wan_sparse_head_placement_kernel(
         tl.store(offset_value_out, value, mask=offset_mask[:, None])
 
 
-def wan_sparse_head_placement(query, key, value, query_out, key_out, value_out, best_mask_idx, context_length, num_frame, frame_size):
+def wan_sparse_head_placement(
+    query, key, value, query_out, key_out, value_out, best_mask_idx, context_length, num_frame, frame_size
+):
     cfg, num_heads, seq_len, head_dim = query.shape
     BLOCK_SIZE = 128
     assert seq_len == context_length + num_frame * frame_size
@@ -152,13 +162,23 @@ def ref_wan_sparse_head_placement(query, key, value, best_mask_idx, context_leng
     value_out = value.clone()
 
     # Spatial
-    query_out[best_mask_idx == 0], key_out[best_mask_idx == 0], value_out[best_mask_idx == 0] = query[best_mask_idx == 0], key[best_mask_idx == 0], value[best_mask_idx == 0]
+    query_out[best_mask_idx == 0], key_out[best_mask_idx == 0], value_out[best_mask_idx == 0] = (
+        query[best_mask_idx == 0],
+        key[best_mask_idx == 0],
+        value[best_mask_idx == 0],
+    )
 
     # Temporal
     query_out[best_mask_idx == 1], key_out[best_mask_idx == 1], value_out[best_mask_idx == 1] = (
-        wan_token_reorder_to_token_major(query[best_mask_idx == 1].unsqueeze(0), context_length, num_frame * frame_size, num_frame, frame_size).squeeze(0),
-        wan_token_reorder_to_token_major(key[best_mask_idx == 1].unsqueeze(0), context_length, num_frame * frame_size, num_frame, frame_size).squeeze(0),
-        wan_token_reorder_to_token_major(value[best_mask_idx == 1].unsqueeze(0), context_length, num_frame * frame_size, num_frame, frame_size).squeeze(0),
+        wan_token_reorder_to_token_major(
+            query[best_mask_idx == 1].unsqueeze(0), context_length, num_frame * frame_size, num_frame, frame_size
+        ).squeeze(0),
+        wan_token_reorder_to_token_major(
+            key[best_mask_idx == 1].unsqueeze(0), context_length, num_frame * frame_size, num_frame, frame_size
+        ).squeeze(0),
+        wan_token_reorder_to_token_major(
+            value[best_mask_idx == 1].unsqueeze(0), context_length, num_frame * frame_size, num_frame, frame_size
+        ).squeeze(0),
     )
 
     return query_out, key_out, value_out
@@ -189,8 +209,12 @@ def test_wan_sparse_head_placement():
     key_out = torch.empty_like(key)
     value_out = torch.empty_like(value)
 
-    wan_sparse_head_placement(query, key, value, query_out, key_out, value_out, best_mask_idx, context_length, num_frame, frame_size)
-    ref_query_out, ref_key_out, ref_value_out = ref_wan_sparse_head_placement(query, key, value, best_mask_idx, context_length, num_frame, frame_size)
+    wan_sparse_head_placement(
+        query, key, value, query_out, key_out, value_out, best_mask_idx, context_length, num_frame, frame_size
+    )
+    ref_query_out, ref_key_out, ref_value_out = ref_wan_sparse_head_placement(
+        query, key, value, best_mask_idx, context_length, num_frame, frame_size
+    )
 
     torch.testing.assert_close(query_out, ref_query_out)
     torch.testing.assert_close(key_out, ref_key_out)
@@ -227,17 +251,23 @@ def benchmark_wan_sparse_head_placement():
 
     # warmup
     for _ in range(warmup):
-        wan_sparse_head_placement(query, key, value, query_out, key_out, value_out, best_mask_idx, context_length, num_frame, frame_size)
+        wan_sparse_head_placement(
+            query, key, value, query_out, key_out, value_out, best_mask_idx, context_length, num_frame, frame_size
+        )
 
     torch.cuda.synchronize()
     start = time.time()
     for _ in range(all_iter):
-        wan_sparse_head_placement(query, key, value, query_out, key_out, value_out, best_mask_idx, context_length, num_frame, frame_size)
+        wan_sparse_head_placement(
+            query, key, value, query_out, key_out, value_out, best_mask_idx, context_length, num_frame, frame_size
+        )
     torch.cuda.synchronize()
     end = time.time()
 
     print(f"Triton Elapsed Time: {(end - start) / all_iter * 1e3:.2f} ms")
-    print(f"Triton Total Bandwidth: {query.nelement() * query.element_size() * 3 * 2 * all_iter / (end - start) / 1e9:.2f} GB/s")
+    print(
+        f"Triton Total Bandwidth: {query.nelement() * query.element_size() * 3 * 2 * all_iter / (end - start) / 1e9:.2f} GB/s"
+    )
 
     torch.cuda.synchronize()
     start = time.time()
@@ -247,7 +277,9 @@ def benchmark_wan_sparse_head_placement():
     end = time.time()
 
     print(f"Reference Elapsed Time: {(end - start) / all_iter * 1e3:.2f} ms")
-    print(f"Reference Total Bandwidth: {query.nelement() * query.element_size() * 3 * 2 * all_iter / (end - start) / 1e9:.2f} GB/s")
+    print(
+        f"Reference Total Bandwidth: {query.nelement() * query.element_size() * 3 * 2 * all_iter / (end - start) / 1e9:.2f} GB/s"
+    )
 
 
 @triton.jit
@@ -288,19 +320,33 @@ def wan_hidden_states_placement_kernel(
     if is_temporal:
         patch_id = offset_token // num_frame
         frame_id = offset_token - patch_id * num_frame
-        offset_store_token = tl.where(offset_token >= seq_len - context_length, offset_token, frame_id * frame_size + patch_id)
+        offset_store_token = tl.where(
+            offset_token >= seq_len - context_length, offset_token, frame_id * frame_size + patch_id
+        )
 
-        offset_load = (cfg * hidden_states_stride_b + head * hidden_states_stride_h + offset_token[:, None] * hidden_states_stride_s) + offset_d[None, :] * hidden_states_stride_d
+        offset_load = (
+            cfg * hidden_states_stride_b
+            + head * hidden_states_stride_h
+            + offset_token[:, None] * hidden_states_stride_s
+        ) + offset_d[None, :] * hidden_states_stride_d
         offset_hidden_states = hidden_states_ptr + offset_load
 
-        offset_store = (cfg * hidden_states_stride_b + head * hidden_states_stride_h + offset_store_token[:, None] * hidden_states_stride_s) + offset_d[None, :] * hidden_states_stride_d
+        offset_store = (
+            cfg * hidden_states_stride_b
+            + head * hidden_states_stride_h
+            + offset_store_token[:, None] * hidden_states_stride_s
+        ) + offset_d[None, :] * hidden_states_stride_d
         offset_hidden_states_out = hidden_states_out_ptr + offset_store
 
         # Maybe tune the pipeline here
         hidden_states = tl.load(offset_hidden_states, mask=offset_mask[:, None])
         tl.store(offset_hidden_states_out, hidden_states, mask=offset_mask[:, None])
     else:
-        offset_load = (cfg * hidden_states_stride_b + head * hidden_states_stride_h + offset_token[:, None] * hidden_states_stride_s) + offset_d[None, :] * hidden_states_stride_d
+        offset_load = (
+            cfg * hidden_states_stride_b
+            + head * hidden_states_stride_h
+            + offset_token[:, None] * hidden_states_stride_s
+        ) + offset_d[None, :] * hidden_states_stride_d
         offset_hidden_states = hidden_states_ptr + offset_load
 
         offset_store = offset_load
@@ -339,16 +385,18 @@ def wan_hidden_states_placement(hidden_states, hidden_states_out, best_mask_idx,
     return hidden_states_out
 
 
-def ref_wan_hidden_states_placement(hidden_states, output_hidden_states, best_mask_idx, context_length, num_frame, frame_size):
+def ref_wan_hidden_states_placement(
+    hidden_states, output_hidden_states, best_mask_idx, context_length, num_frame, frame_size
+):
     cfg, num_heads, seq_len, head_dim = hidden_states.shape
     assert seq_len == context_length + num_frame * frame_size
 
     # Spatial
     output_hidden_states[best_mask_idx == 0] = hidden_states[best_mask_idx == 0]
     # Temporal
-    output_hidden_states[best_mask_idx == 1] = wan_token_reorder_to_frame_major(hidden_states[best_mask_idx == 1].unsqueeze(0), context_length, num_frame * frame_size, num_frame, frame_size).squeeze(
-        0
-    )
+    output_hidden_states[best_mask_idx == 1] = wan_token_reorder_to_frame_major(
+        hidden_states[best_mask_idx == 1].unsqueeze(0), context_length, num_frame * frame_size, num_frame, frame_size
+    ).squeeze(0)
 
 
 def test_wan_hidden_states_placement():
@@ -373,7 +421,9 @@ def test_wan_hidden_states_placement():
     hidden_states_out2 = torch.empty_like(hidden_states)
 
     wan_hidden_states_placement(hidden_states, hidden_states_out1, best_mask_idx, context_length, num_frame, frame_size)
-    ref_wan_hidden_states_placement(hidden_states, hidden_states_out2, best_mask_idx, context_length, num_frame, frame_size)
+    ref_wan_hidden_states_placement(
+        hidden_states, hidden_states_out2, best_mask_idx, context_length, num_frame, frame_size
+    )
 
     torch.testing.assert_close(hidden_states_out1, hidden_states_out2)
 
@@ -404,27 +454,37 @@ def benchmark_wan_hidden_states_placement():
 
     # warmup
     for _ in range(warmup):
-        wan_hidden_states_placement(hidden_states, hidden_states_out, best_mask_idx, context_length, num_frame, frame_size)
+        wan_hidden_states_placement(
+            hidden_states, hidden_states_out, best_mask_idx, context_length, num_frame, frame_size
+        )
 
     torch.cuda.synchronize()
     start = time.time()
     for _ in range(all_iter):
-        wan_hidden_states_placement(hidden_states, hidden_states_out, best_mask_idx, context_length, num_frame, frame_size)
+        wan_hidden_states_placement(
+            hidden_states, hidden_states_out, best_mask_idx, context_length, num_frame, frame_size
+        )
     torch.cuda.synchronize()
     end = time.time()
 
     print(f"Triton Elapsed Time: {(end - start) / all_iter * 1e3:.2f} ms")
-    print(f"Triton Total Bandwidth: {hidden_states.nelement() * hidden_states.element_size() * 2 * all_iter / (end - start) / 1e9:.2f} GB/s")
+    print(
+        f"Triton Total Bandwidth: {hidden_states.nelement() * hidden_states.element_size() * 2 * all_iter / (end - start) / 1e9:.2f} GB/s"
+    )
 
     torch.cuda.synchronize()
     start = time.time()
     for _ in range(all_iter):
-        ref_wan_hidden_states_placement(hidden_states, hidden_states.clone(), best_mask_idx, context_length, num_frame, frame_size)
+        ref_wan_hidden_states_placement(
+            hidden_states, hidden_states.clone(), best_mask_idx, context_length, num_frame, frame_size
+        )
     torch.cuda.synchronize()
     end = time.time()
 
     print(f"Reference Elapsed Time: {(end - start) / all_iter * 1e3:.2f} ms")
-    print(f"Reference Total Bandwidth: {hidden_states.nelement() * hidden_states.element_size() * 2 * all_iter / (end - start) / 1e9:.2f} GB/s")
+    print(
+        f"Reference Total Bandwidth: {hidden_states.nelement() * hidden_states.element_size() * 2 * all_iter / (end - start) / 1e9:.2f} GB/s"
+    )
 
 
 if __name__ == "__main__":

@@ -21,7 +21,10 @@ def load_prompts(prompt_dir: str) -> dict:
         Dictionary mapping video names to their prompts
     """
     prompts = {}
-    prompt_files = list(Path(prompt_dir).glob("*.txt"))
+    if prompt_dir.endswith('.txt'):
+        prompt_files = [prompt_dir]
+    else:
+        prompt_files = list(Path(prompt_dir).glob("*.txt"))
     
     # Process all prompt files (no limit here, limit will be applied later)
     # max_prompts = getattr(load_prompts, 'max_prompts', 256)  # Default to 256 if not set
@@ -36,7 +39,7 @@ def load_prompts(prompt_dir: str) -> dict:
             prompt = line.strip()
             if prompt:  # Skip empty lines
                 # Video name is generated from first 200 chars of prompt
-                video_name = prompt
+                video_name = prompt[:100]
                 prompts[video_name] = prompt
     
     print(f"Loaded {len(prompts)} prompts from {prompt_dir}")
@@ -67,8 +70,8 @@ def organize_evaluation_pairs(full_folder: str, sparse_folder: str, output_base:
     full_videos = {k : v for k, v in full_videos.items() if any(f"{x}-0" == k for x in prompts.keys())}
     sparse_videos = {k : v for k, v in sparse_videos.items() if any(f"{x}-0" == k for x in prompts.keys())}
 
-    assert len(full_videos) == 200
-    assert len(sparse_videos) == 200
+    assert len(full_videos) == 196
+    assert len(sparse_videos) == 196
 
     # Find matching video names
     matching_names = sorted(list(set(full_videos.keys()) & set(sparse_videos.keys())))

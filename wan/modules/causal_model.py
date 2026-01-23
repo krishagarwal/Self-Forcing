@@ -19,7 +19,7 @@ import math
 import torch.distributed as dist
 from einops import rearrange
 import os
-from .sparse_videogen.attention import sparse_attention, Wan_SparseAttn, prepare_flexattention, prepare_dense_attention
+from .sparse_videogen.attention import WanAttn_SVGAttn_Processor2_0, prepare_flexattention
 from .sparse_videogen.utils import get_attention_mask, sparsity_to_width
 from .radial_attn.attn_mask import MaskMap, RadialAttention
 from .monarch_attn import monarch_attn, monarch_attn_with_kv_cache
@@ -961,29 +961,29 @@ class CausalWanSelfAttention(nn.Module):
                 curr_k[:, local_start_index:local_end_index] = roped_key
                 curr_v[:, local_start_index:local_end_index] = v
                 target_seq_len = 21 * 30 * 52 # curr_k.size(1)
-                if Wan_SparseAttn.curr_seq_len != target_seq_len:
-                    sample_mse_max_row = 100000
-                    Wan_SparseAttn.num_sampled_rows = 64
-                    Wan_SparseAttn.sample_mse_max_row = sample_mse_max_row
+                if WanAttn_SVGAttn_Processor2_0.curr_seq_len != target_seq_len:
+                    sample_mse_max_row = 10000
+                    WanAttn_SVGAttn_Processor2_0.num_sampled_rows = 64
+                    WanAttn_SVGAttn_Processor2_0.sample_mse_max_row = sample_mse_max_row
                     num_frame_patches = target_seq_len // (30 * 52)
                     frame_patches_one_frame = 30 * 52
                     masks = ["spatial", "temporal"]
-                    Wan_SparseAttn.attention_masks = [
+                    WanAttn_SVGAttn_Processor2_0.attention_masks = [
                         get_attention_mask(
                             mask_name, sample_mse_max_row, 0, num_frame_patches, frame_patches_one_frame
                         )
                         for mask_name in masks
                     ]
-                    Wan_SparseAttn.first_layers_fp = 0.025 if self.use_hacks else 0
-                    Wan_SparseAttn.first_times_fp = 0.075 if self.use_hacks else 0
+                    WanAttn_SVGAttn_Processor2_0.first_layers_fp = 0.025 if self.use_hacks else 0
+                    WanAttn_SVGAttn_Processor2_0.first_times_fp = 0.075 if self.use_hacks else 0
 
                     multiplier = diag_width = sparsity_to_width(
                         0.15, 0, num_frame_patches, frame_patches_one_frame
                     )
-                    Wan_SparseAttn.context_length = 0
-                    Wan_SparseAttn.num_frame = num_frame_patches
-                    Wan_SparseAttn.frame_size = frame_patches_one_frame
-                    Wan_SparseAttn.block_mask = prepare_flexattention(
+                    WanAttn_SVGAttn_Processor2_0.context_length = 0
+                    WanAttn_SVGAttn_Processor2_0.num_frame = num_frame_patches
+                    WanAttn_SVGAttn_Processor2_0.frame_size = frame_patches_one_frame
+                    WanAttn_SVGAttn_Processor2_0.block_mask = prepare_flexattention(
                         1,
                         12,
                         128,
@@ -996,47 +996,40 @@ class CausalWanSelfAttention(nn.Module):
                         diag_width,
                         multiplier
                     )
-                    Wan_SparseAttn.dense_block_mask = prepare_dense_attention(
-                        1,
-                        12,
-                        128,
-                        q.dtype,
-                        q.device,
-                        0,
-                        0,
-                        num_frame_patches,
-                        frame_patches_one_frame,
-                    )
-                    Wan_SparseAttn.curr_seq_len = target_seq_len
+                    WanAttn_SVGAttn_Processor2_0.curr_seq_len = target_seq_len
 
                 # padded_q = torch.nn.functional.pad(
                 #     roped_query, (0, 0, 0, 0, curr_k.size(1) - roped_query.size(1), 0), value=0.0
                 # )
                 # assert padded_q.shape == curr_k.shape
+
+                roped_query = roped_query.transpose(1, 2).contiguous()
+                curr_k = curr_k.transpose(1, 2).contiguous()
+                curr_v = curr_v.transpose(1, 2).contiguous()
                 
                 padded_q = torch.nn.functional.pad(
                     roped_query, (0, 0, 0, 0, curr_k.size(1) - roped_query.size(1), 21 * 30 * 52 - curr_k.size(1)), value=0.0
                 )
                 padded_k = torch.nn.functional.pad(
-                    curr_k, (0, 0, 0, 0, 0, 21 * 30 * 52 - curr_k.size(1)), value=0.0
+                    curr_k, (0, 0, 0, 21 * 30 * 52 - curr_k.size(1)), value=0.0
                 )
                 padded_v = torch.nn.functional.pad(
-                    curr_v, (0, 0, 0, 0, 0, 21 * 30 * 52 - curr_v.size(1)), value=0.0
+                    curr_v, (0, 0, 0, 21 * 30 * 52 - curr_v.size(1)), value=0.0
                 )
                 assert padded_q.shape == padded_k.shape
-                Wan_SparseAttn.sample_mse_min_row = curr_k.size(1) - roped_query.size(1)
-                Wan_SparseAttn.sample_mse_max_row = curr_k.size(1)
+                WanAttn_SVGAttn_Processor2_0.sample_mse_min_row = curr_k.size(1) - roped_query.size(1)
+                WanAttn_SVGAttn_Processor2_0.sample_mse_max_row = curr_k.size(1)
 
                 # padded_q = padded_q.transpose(1, 2).contiguous()
                 # curr_k = curr_k.transpose(1, 2).contiguous()
                 # curr_v = curr_v.transpose(1, 2).contiguous()
-                x = sparse_attention(
+                x = WanAttn_SVGAttn_Processor2_0.attention_core_logic(
                     padded_q,
                     padded_k,
                     padded_v,
                     layer_idx=self.block_num,
                     timestep=timestep,
-                )
+                ).transpose(1, 2)
                 # x = x[:, -roped_query.size(1):, :, :]
                 x = x[:, curr_k.size(1) - roped_query.size(1) : curr_k.size(1), :, :]
                 assert x.shape == roped_query.shape
