@@ -126,7 +126,7 @@ spec:
                   export MONARCH_ATTN_H_REDUCE=1 &&
                   export MONARCH_ATTN_W_REDUCE=1 &&
                   export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True &&
-                  torchrun --nproc_per_node=8 --rdzv-conf="timeout=7200,read_timeout=7200,join_timeout=7200" train.py --config_path configs/wan_fewstep_dmd_monarch_fast_framewise.yaml --logdir /checkpoints-fsx/beidchen-sandbox/self_forcing_logs/wan_fewstep_dmd_monarch_fast_framewise --wandb_name wan_fewstep_dmd_monarch_fast_framewise | tee /code-fsx/beidchen-sandbox/wan_fewstep_dmd_monarch_fast_framewise.log
+                  torchrun --nproc_per_node=8 --rdzv-conf="timeout=7200,read_timeout=7200,join_timeout=7200" train.py --config_path configs/wan_fewstep_dmd.yaml --logdir /checkpoints-fsx/beidchen-sandbox/self_forcing_logs/wan_fewstep_dmd_monarch_fast_framewise --wandb_name wan_fewstep_dmd_monarch_fast_framewise | tee /code-fsx/beidchen-sandbox/wan_fewstep_dmd_monarch_fast_framewise.log
               image: 767397878797.dkr.ecr.us-east-1.amazonaws.com/agif-mm-pt-base:reasoning-vllm.sglang.megatron.deepseek.video.fa3
               imagePullPolicy: Always
               securityContext:
