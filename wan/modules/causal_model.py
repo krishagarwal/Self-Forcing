@@ -893,6 +893,7 @@ class CausalWanSelfAttention(nn.Module):
                         self.w_reduce,
                         30,
                         52,
+                        self.num_iters,
                         block_causal_size=3*30*52,
                     )
         else:
@@ -1087,6 +1088,7 @@ class CausalWanSelfAttention(nn.Module):
                     self.w_reduce,
                     30,
                     52,
+                    num_iters=self.num_iters,
                     grad_only_new_kv=not (kv_cache["k"].requires_grad or kv_cache["v"].requires_grad)
                 )
 

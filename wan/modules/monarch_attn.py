@@ -1700,7 +1700,55 @@ def _get_rearrange_fns(x, f_tied, h_reduce, w_reduce, h, w):
         return rearrange(x, 'b (a c e) (f i) j h d -> b (a f c i e j) h d', c=h_reduce, e=w_reduce, f=f_tied)
     return rearrange_fn, return_fn
 
-def monarch_attn(q, k, v, f_tied, h_reduce, w_reduce, h, w, sm_scale=None, block_causal_size=None):
+def monarch_attn_slow(Q, K, V, sm_scale, num_iters=1):
+    b, a, i, j, h, _ = Q.shape
+    block_b1, block_b2 = i, j
+    k, l = block_b1, block_b2
+    f = K.shape[-5]
+
+    sm_scale_sqrt = sm_scale ** 0.5
+    Q = Q * sm_scale_sqrt
+    K = K * sm_scale_sqrt
+
+    aR = Q.clone().unsqueeze(-5).expand(-1, -1, f, -1, -1, -1, -1) # (b, a, f, k, j, h, d)
+    cR = torch.ones((b, h, a, f, k, j, 1), device=Q.device, dtype=Q.dtype) # (b, h, a, f, k, j, 1)
+
+    for _ in range(num_iters - 1):
+        bR = torch.einsum("bafkjhd,bfklhd->bhafkjl", aR, K)
+        z = bR.to(torch.float32) * (1.0 / cR)
+        z = z - z.amax(dim=-1, keepdim=True)
+        R = torch.softmax(z, dim=-1).to(Q.dtype)
+        aL = torch.einsum("bhafkjl,bfklhd->bafjkhd", R, K)
+        logz = torch.logsumexp(z, dim=-1, keepdim=True) # (b, h, a, f, k, j, 1)
+        cL = (R * (z - logz)).sum(dim=-1, keepdim=True).transpose(-2, -3) # (b, h, a, f, j, k, 1)
+
+        bL = torch.einsum("bafjkhd,baijhd->bhafjki", aL, Q)
+        L = rearrange(bL - cL, "b h a f j k i -> b h a j i (f k)")
+        L = torch.softmax(L, dim=-1).to(Q.dtype)
+        L = rearrange(L, "b h a j i (f k) -> b h a f j k i", f=f, k=k)
+
+        aR = torch.einsum("bhafjki,baijhd->bafkjhd", L, Q) 
+        cR = L.sum(dim=-1, dtype=torch.float32).unsqueeze(-1).transpose(-2, -3) # (b, h, a, f, k, j, 1)
+
+    bR = torch.einsum("bafkjhd,bfklhd->bhafkjl", aR, K)
+    z = bR.to(torch.float32) * (1.0 / cR)
+    z = z - z.amax(dim=-1, keepdim=True)
+    R = torch.softmax(z, dim=-1).to(Q.dtype)
+    aL = torch.einsum("bhafkjl,bfklhd->bafjkhd", R, K)
+    logz = torch.logsumexp(z, dim=-1, keepdim=True) # (b, h, a, f, k, j, 1)
+    cL = (R * (z - logz)).sum(dim=-1, keepdim=True).transpose(-2, -3) # (b, h, a, f, j, k, 1)
+    Y = torch.einsum("bhafkjl,bfklhd->bafjkhd", R, V)
+
+    bL = torch.einsum("bafjkhd,baijhd->bhafjki", aL, Q)
+    L = rearrange(bL - cL, "b h a f j k i -> b h a j i (f k)")
+    L = torch.softmax(L, dim=-1).to(Q.dtype)
+    L = rearrange(L, "b h a j i (f k) -> b h a f j k i", f=f, k=k)
+
+    out = torch.einsum("bhafjki,bafjkhd->baijhd", L, Y)
+
+    return out
+
+def monarch_attn(q, k, v, f_tied, h_reduce, w_reduce, h, w, sm_scale=None, block_causal_size=None, num_iters=1):
     b, qs, nh, d = q.shape
     ks = k.shape[1]
     if sm_scale is None:
@@ -1716,12 +1764,16 @@ def monarch_attn(q, k, v, f_tied, h_reduce, w_reduce, h, w, sm_scale=None, block
         assert ks == qs, "currently only support causal attention with kv length equal to q length"
         assert block_causal_size % (q.shape[2] * q.shape[3]) == 0, "block_causal_size must align with Monarch block sizes"
         causal_block_size = block_causal_size // (q.shape[2] * q.shape[3])
-
-    z = _attention_no_cache.apply(q, k, v, sm_scale, causal_block_size, torch.is_grad_enabled())
+        assert num_iters == 1, "causal currently only supported for num_iters=1"
+    
+    if num_iters == 1:
+        z = _attention_no_cache.apply(q, k, v, sm_scale, causal_block_size, torch.is_grad_enabled())
+    else:
+        z = monarch_attn_slow(q, k, v, sm_scale, num_iters=num_iters)
     z = return_fn(z)
     return z
 
-def monarch_attn_with_kv_cache(q, k_cache, v_cache, new_k, new_v, start_idx, end_idx, f_tied, h_reduce, w_reduce, h, w, sm_scale=None, grad_only_new_kv=False):
+def monarch_attn_with_kv_cache(q, k_cache, v_cache, new_k, new_v, start_idx, end_idx, f_tied, h_reduce, w_reduce, h, w, sm_scale=None, num_iters=1, grad_only_new_kv=False):
     b, _, nh, d = q.shape
     if sm_scale is None:
         sm_scale = q.shape[-1] ** -0.5
@@ -1729,7 +1781,15 @@ def monarch_attn_with_kv_cache(q, k_cache, v_cache, new_k, new_v, start_idx, end
     q = rearrange_fn(q).contiguous()
     new_k = rearrange_fn(new_k).reshape(b, -1, nh, d)
     new_v = rearrange_fn(new_v).reshape(b, -1, nh, d)
-    z = _attention_with_cache.apply(q, k_cache, v_cache, new_k, new_v, start_idx, end_idx, sm_scale, torch.is_grad_enabled(), grad_only_new_kv)
+    if num_iters == 1:
+        z = _attention_with_cache.apply(q, k_cache, v_cache, new_k, new_v, start_idx, end_idx, sm_scale, torch.is_grad_enabled(), grad_only_new_kv)
+    else:
+        k_cache[:, start_idx:end_idx, :, :] = new_k
+        v_cache[:, start_idx:end_idx, :, :] = new_v
+        block_b1, block_b2 = q.shape[2], q.shape[3]
+        k_cache = k_cache.view(b, -1, block_b1, block_b2, nh, d)
+        v_cache = v_cache.view(b, -1, block_b1, block_b2, nh, d)
+        z = monarch_attn_slow(q, k_cache, v_cache, sm_scale, num_iters=num_iters)
     z = return_fn(z)
     return z
 

@@ -671,7 +671,7 @@ class WanSelfAttention(nn.Module):
         else:
             h, w = grid_sizes[0, 1].item(), grid_sizes[0, 2].item()
             b, s, _, d = q.shape
-            x = monarch_attn(roped_query, k, v, self.f_tied, self.h_reduce, self.w_reduce, h, w)
+            x = monarch_attn(roped_query, k, v, self.f_tied, self.h_reduce, self.w_reduce, h, w, num_iters=self.num_iters)
 
         # output
         x = x.flatten(2)
