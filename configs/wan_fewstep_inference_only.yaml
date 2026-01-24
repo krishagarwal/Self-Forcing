@@ -1,5 +1,4 @@
 generator_ckpt: /checkpoints-fsx/beidchen-sandbox/self_forcing_logs/wan_fewstep_dmd/checkpoint_model_000700/model.pt
-generator_ckpt: wan_models/Wan2.1-T2V-1.3B/
 generator_fsdp_wrap_strategy: size
 real_score_fsdp_wrap_strategy: size
 fake_score_fsdp_wrap_strategy: size
