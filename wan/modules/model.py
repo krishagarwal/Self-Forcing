@@ -12,7 +12,7 @@ from .attention import flash_attention
 from .sparse_videogen.attention import WanAttn_SVGAttn_Processor2_0, prepare_flexattention, WanAttn_SAPAttn_Processor
 from .sparse_videogen.utils import get_attention_mask, sparsity_to_width
 from .radial_attn.attn_mask import MaskMap, RadialAttention
-from .radial_attn.attn_mask_flexattn import RadialAttention as FlexRadialAttention
+from .radial_attn.radial_attn_torch import build_radial_dense_allow_mask, radial_sdpa_video_only
 from .video_sparse_attn.video_sparse_attn import VideoSparseAttentionMetadataBuilder, VideoSparseAttentionImpl
 from .monarch_attn import monarch_attn
 
@@ -541,7 +541,8 @@ class WanSelfAttention(nn.Module):
             self.attn_impl = VideoSparseAttentionImpl()
         self.use_radial_attn = bool(int(os.getenv("USE_RADIAL_ATTN", "0")))
         if self.use_radial_attn:
-            self.mask_map = None
+            # self.mask_map = None
+            WanSelfAttention.sdpa_mask = None
         self.block_num = block_num
 
         # layers
@@ -674,13 +675,16 @@ class WanSelfAttention(nn.Module):
                     k_lens=seq_lens,
                     window_size=self.window_size)
             else:
-                if self.mask_map is None:
-                    self.mask_map = MaskMap(video_token_num=roped_key.size(1), num_frame=roped_key.size(1)//(30*52))
+                # if self.mask_map is None:
+                #     self.mask_map = MaskMap(video_token_num=roped_key.size(1), num_frame=roped_key.size(1)//(30*52))
+                if WanSelfAttention.sdpa_mask is None:
+                    WanSelfAttention.sdpa_mask = build_radial_dense_allow_mask(video_token_num=roped_key.size(1), num_frame=roped_key.size(1)//(30*52), block_size=1, decay_factor=0.0, model_type="wan", device=x.device)
                 assert roped_query.shape == roped_key.shape
-                x = RadialAttention(
-                    roped_query, roped_key, v, self.mask_map, sparsity_type="radial", block_size=1, decay_factor=0.0, model_type="wan", pre_defined_mask=None, use_sage_attention=False
-                )
-                x = rearrange(x, 'b s (h d) -> b s h d', d=d)
+                # x = RadialAttention(
+                #     roped_query, roped_key, v, self.mask_map, sparsity_type="radial", block_size=1, decay_factor=0.0, model_type="wan", pre_defined_mask=None, use_sage_attention=False
+                # )
+                # x = rearrange(x, 'b s (h d) -> b s h d', d=d)
+                x = radial_sdpa_video_only(roped_query, roped_key, v, WanSelfAttention.sdpa_mask)
                 assert x.shape == roped_query.shape
         else:
             h, w = grid_sizes[0, 1].item(), grid_sizes[0, 2].item()
