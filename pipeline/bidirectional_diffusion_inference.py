@@ -35,7 +35,8 @@ class BidirectionalDiffusionInferencePipeline(torch.nn.Module):
         self,
         noise: torch.Tensor,
         text_prompts: List[str],
-        return_latents=False
+        return_latents=False,
+        initial_latent=None,
     ) -> torch.Tensor:
         """
         Perform inference on the given noise and text prompts.
@@ -48,6 +49,7 @@ class BidirectionalDiffusionInferencePipeline(torch.nn.Module):
                 (batch_size, num_frames, num_channels, height, width). It is normalized to be in the range [0, 1].
         """
 
+        assert initial_latent is None, "initial_latent is not supported in bidirectional model"
         conditional_dict = self.text_encoder(
             text_prompts=text_prompts
         )

@@ -12,6 +12,8 @@ from .attention import flash_attention
 from .sparse_videogen.attention import WanAttn_SVGAttn_Processor2_0, prepare_flexattention, WanAttn_SAPAttn_Processor
 from .sparse_videogen.utils import get_attention_mask, sparsity_to_width
 from .radial_attn.attn_mask import MaskMap, RadialAttention
+from .radial_attn.attn_mask_flexattn import RadialAttention as FlexRadialAttention
+from .video_sparse_attn.video_sparse_attn import VideoSparseAttentionMetadataBuilder, VideoSparseAttentionImpl
 from .monarch_attn import monarch_attn
 
 __all__ = ['WanModel']
@@ -532,7 +534,11 @@ class WanSelfAttention(nn.Module):
             self.svg2_processor.kmeans_iter_init = 50
             self.svg2_processor.kmeans_iter_step = 2
             self.svg2_processor.zero_step_kmeans_init = True
-
+        self.use_vsa = bool(int(os.getenv("USE_VSA", "0")))
+        if self.use_vsa:
+            self.gate_compress = nn.Linear(dim, dim, bias=True)
+            self.attn_metadata = None
+            self.attn_impl = VideoSparseAttentionImpl()
         self.use_radial_attn = bool(int(os.getenv("USE_RADIAL_ATTN", "0")))
         if self.use_radial_attn:
             self.mask_map = None
@@ -650,6 +656,14 @@ class WanSelfAttention(nn.Module):
                 v.transpose(1, 2).contiguous(),
                 timestep=timestep,
             ).transpose(1, 2)
+        elif self.use_vsa:
+            if self.attn_metadata is None:
+                self.attn_metadata = VideoSparseAttentionMetadataBuilder().build(([s // 1560, 30, 52]), 0.85, x.device)
+            gate = self.gate_compress(x).view(b, s, n, d)
+            qkvg = torch.cat([roped_query, roped_key, v, gate], dim=0)
+            qkvg = self.attn_impl.preprocess_qkv(qkvg, self.attn_metadata)
+            roped_query, roped_key, v, g = qkvg.chunk(4, dim=0)
+            x = self.attn_impl.forward(roped_query, roped_key, v, g, self.attn_metadata)
         elif self.use_radial_attn:
             # 0.036 covers first 12 timesteps
             if ((timestep > 1000 * (1 - 0.036)) or self.block_num < 1) and self.use_hacks:

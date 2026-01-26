@@ -243,7 +243,7 @@ class Trainer:
                 state_dict = state_dict["model"]
             state_dict = {rename_param(k): v for k, v in state_dict.items()}
             self.model.generator.load_state_dict(
-                state_dict, strict=True
+                state_dict, strict=False # TODO: temporarily set strict=False to support VSA
             )
 
         ##############################################################################################################

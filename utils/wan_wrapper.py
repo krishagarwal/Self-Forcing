@@ -127,7 +127,8 @@ class WanDiffusionWrapper(torch.nn.Module):
             self.model = CausalWanModel.from_pretrained(
                 f"wan_models/{model_name}/", local_attn_size=local_attn_size, sink_size=sink_size)
         else:
-            self.model = WanModel.from_pretrained(f"wan_models/{model_name}/")
+            # TODO: added low_cpu_mem_usage=False and device_map=None temporarily to support VSA
+            self.model = WanModel.from_pretrained(f"wan_models/{model_name}/", low_cpu_mem_usage=False, device_map=None)
         self.model.eval()
 
         # For non-causal diffusion, all frames share the same timestep
