@@ -119,7 +119,7 @@ spec:
                   MAX_JOBS=4 pip install flash-attn --no-build-isolation &&
                   pip install flashinfer-python &&
                   python setup.py develop &&
-                  cd /code-fsx/beidchen-sandbox/Self-Forcing/FastVideo/fastvideo-kernel &&
+                  cd /code-fsx/beidchen-sandbox/FastVideo/fastvideo-kernel &&
                   sh build.sh &&
                   cd /code-fsx/beidchen-sandbox/Self-Forcing &&
                   mkdir -p /checkpoints-fsx/beidchen-sandbox/self_forcing_logs/wan_fewstep_dmd_monarch_fast_framewise &&
