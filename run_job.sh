@@ -131,5 +131,5 @@
 # kubectl apply -f yaml/run_wan_fewstep_dmd.yaml
 # kubectl apply -f yaml/run_wan_fewstep_dmd_monarch_fast_framewise.yaml
 # kubectl apply -f yaml/run_wan_fewstep_dmd_monarch_fast_framewise_reduce2xh.yaml
-# kubectl apply -f yaml/run_wan_fewstep_dmd_vsa.yaml
+kubectl apply -f yaml/run_wan_fewstep_dmd_vsa.yaml
 kubectl apply -f yaml/run_wan_fewstep_dmd_radial_attn.yaml
