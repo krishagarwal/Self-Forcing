@@ -536,6 +536,7 @@ class WanSelfAttention(nn.Module):
             self.svg2_processor.zero_step_kmeans_init = True
         self.use_vsa = bool(int(os.getenv("USE_VSA", "0")))
         if self.use_vsa:
+            self.vsa_sparsity = float(os.getenv("VSA_SPARSITY", "0.85"))
             self.gate_compress = nn.Linear(dim, dim, bias=True)
             self.attn_metadata = None
             self.attn_impl = VideoSparseAttentionImpl()
@@ -659,7 +660,7 @@ class WanSelfAttention(nn.Module):
             ).transpose(1, 2)
         elif self.use_vsa:
             if self.attn_metadata is None:
-                self.attn_metadata = VideoSparseAttentionMetadataBuilder().build(([s // 1560, 30, 52]), 0.85, x.device)
+                self.attn_metadata = VideoSparseAttentionMetadataBuilder().build(([s // 1560, 30, 52]), self.vsa_sparsity, x.device)
             gate = self.gate_compress(x).view(b, s, n, d)
             qkvg = torch.cat([roped_query, roped_key, v, gate], dim=0)
             qkvg = self.attn_impl.preprocess_qkv(qkvg, self.attn_metadata)
