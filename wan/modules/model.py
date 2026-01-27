@@ -575,28 +575,7 @@ class WanSelfAttention(nn.Module):
         roped_query = rope_apply(q, grid_sizes, freqs)
         roped_key = rope_apply(k, grid_sizes, freqs)
 
-        if self.disable_monarch and not self.use_svg and not self.use_radial_attn:
-            if self.topk is not None:
-                x_all = []
-                s = roped_query.size(1)
-                num_chunks = 16
-                for start in range(0, s, s // num_chunks):
-                    roped_query_i = roped_query[:, start:start + s // num_chunks, :, :]
-                    qk = torch.einsum('bihd,bjhd->bhij', roped_query_i, roped_key) * (d ** -0.5)
-                    _, bottomk = qk.topk(dim=-1, k=int((1 - self.topk) * qk.size(-1)), largest=False)
-                    qk.scatter_(-1, bottomk, -torch.inf)
-                    qk = torch.softmax(qk, dim=-1)
-                    x = torch.einsum('bhij,bjhd->bihd', qk, v)
-                    x_all.append(x)
-                x = torch.cat(x_all, dim=1)
-            else:
-                x = flash_attention(
-                    q=roped_query,
-                    k=roped_key,
-                    v=v,
-                    k_lens=seq_lens,
-                    window_size=self.window_size)
-        elif self.use_svg:
+        if self.use_svg:
             target_seq_len = roped_query.size(1)
             if WanAttn_SVGAttn_Processor2_0.curr_seq_len != target_seq_len:
                 sample_mse_max_row = 10000
@@ -652,6 +631,9 @@ class WanSelfAttention(nn.Module):
                 self.svg2_processor.centroids_init = False
                 self.svg2_processor.q_centroids = None
                 self.svg2_processor.k_centroids = None
+                self.svg2_processor.context_length = 0
+                self.svg2_processor.num_frame = 30 * 52
+                self.svg2_processor.frame_size = roped_key.size(1) // (30 * 52)
             x = self.svg2_processor.attention_core_logic(
                 roped_query.transpose(1, 2).contiguous(),
                 roped_key.transpose(1, 2).contiguous(),
@@ -687,6 +669,27 @@ class WanSelfAttention(nn.Module):
                 # x = rearrange(x, 'b s (h d) -> b s h d', d=d)
                 x = radial_sdpa_video_only(roped_query, roped_key, v, WanSelfAttention.sdpa_mask)
                 assert x.shape == roped_query.shape
+        elif not self.disable_monarch:
+            if self.topk is not None:
+                x_all = []
+                s = roped_query.size(1)
+                num_chunks = 16
+                for start in range(0, s, s // num_chunks):
+                    roped_query_i = roped_query[:, start:start + s // num_chunks, :, :]
+                    qk = torch.einsum('bihd,bjhd->bhij', roped_query_i, roped_key) * (d ** -0.5)
+                    _, bottomk = qk.topk(dim=-1, k=int((1 - self.topk) * qk.size(-1)), largest=False)
+                    qk.scatter_(-1, bottomk, -torch.inf)
+                    qk = torch.softmax(qk, dim=-1)
+                    x = torch.einsum('bhij,bjhd->bihd', qk, v)
+                    x_all.append(x)
+                x = torch.cat(x_all, dim=1)
+            else:
+                x = flash_attention(
+                    q=roped_query,
+                    k=roped_key,
+                    v=v,
+                    k_lens=seq_lens,
+                    window_size=self.window_size)
         else:
             h, w = grid_sizes[0, 1].item(), grid_sizes[0, 2].item()
             b, s, _, d = q.shape
