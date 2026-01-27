@@ -163,7 +163,7 @@ class WanAttn_SVGAttn_Processor2_0:
 
         if layer_idx < cls.first_layers_fp:
             full_attention_flag = True
-        if timestep > cls.first_times_fp:
+        if timestep > 1000 * (1 - cls.first_times_fp):
             full_attention_flag = True
 
         if full_attention_flag:
@@ -380,7 +380,7 @@ class WanAttn_SAPAttn_Processor(WanAttn_SVGAttn_Processor2_0):
 
         if self.layer_idx < self.first_layers_fp:
             full_attention_flag = True
-        if timestep < self.first_times_fp:
+        if timestep > 1000 * (1 - self.first_times_fp):
             full_attention_flag = True
 
         if full_attention_flag:

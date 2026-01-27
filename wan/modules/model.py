@@ -615,8 +615,8 @@ class WanSelfAttention(nn.Module):
                 WanAttn_SVGAttn_Processor2_0.curr_seq_len = target_seq_len
 
             assert roped_query.shape == roped_key.shape
-            WanAttn_SVGAttn_Processor2_0.sample_mse_min_row = 0
-            WanAttn_SVGAttn_Processor2_0.sample_mse_max_row = roped_key.size(1)
+            # WanAttn_SVGAttn_Processor2_0.sample_mse_min_row = 0
+            # WanAttn_SVGAttn_Processor2_0.sample_mse_max_row = roped_key.size(1)
 
             x = WanAttn_SVGAttn_Processor2_0.attention_core_logic(
                 roped_query.transpose(1, 2).contiguous(),
