@@ -529,10 +529,18 @@ class WanSelfAttention(nn.Module):
             self.svg2_processor.first_times_fp = 0.036 if self.use_hacks else 0 # 0.036 covers first 12 timesteps
             self.svg2_processor.num_q_centroids = 200
             self.svg2_processor.num_k_centroids = 1000
-            # top_p_kmeans=0.5 / min_kc_ratio=0.1 results in ~85% sparsity
-            # top_p_kmeans=0.45 / min_kc_ratio=0.05 results in ~90% sparsity
-            self.svg2_processor.top_p_kmeans = 0.45 # 0.9
-            self.svg2_processor.min_kc_ratio = 0.05 # 0.1
+            if sparsity == 0.85:
+                self.svg2_processor.top_p_kmeans = 0.5
+                self.svg2_processor.min_kc_ratio = 0.1
+            elif sparsity == 0.90:
+                self.svg2_processor.top_p_kmeans = 0.45
+                self.svg2_processor.min_kc_ratio = 0.05
+            elif sparsity == 0.95:
+                self.svg2_processor.top_p_kmeans = 0.3
+                self.svg2_processor.min_kc_ratio = 0.02
+            else:
+                self.svg2_processor.top_p_kmeans = 0.9
+                self.svg2_processor.min_kc_ratio = 0.1
             self.svg2_processor.kmeans_iter_init = 50
             self.svg2_processor.kmeans_iter_step = 2
             self.svg2_processor.zero_step_kmeans_init = True
