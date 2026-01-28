@@ -120,6 +120,9 @@ spec:
                   pip install flashinfer-python &&
                   python setup.py develop &&
                   mkdir -p /checkpoints-fsx/beidchen-sandbox/self_forcing_logs/self_forcing_monarch_slow_framewise &&
+                  cd /workspace &&
+                  huggingface-cli download gdhe17/Self-Forcing checkpoints/self_forcing_dmd.pt --local-dir . &&
+                  cd /code-fsx/beidchen-sandbox/Self-Forcing &&
                   export DISABLE_MONARCH_ATTN=0 &&
                   export MONARCH_ATTN_FRAMEWISE=1 &&
                   export MONARCH_ATTN_NUM_ITERS=20 &&
