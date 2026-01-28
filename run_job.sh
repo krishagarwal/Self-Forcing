@@ -136,9 +136,19 @@
 # kubectl apply -f yaml/run_wan_fewstep_dmd_vsa95.yaml
 # kubectl apply -f yaml/run_wan_fewstep_dmd_vsa90.yaml
 
-kubectl apply -f yaml/run_self_forcing_inference_monarch_slow_framewise.yaml
+# kubectl apply -f yaml/run_self_forcing_inference_monarch_slow_framewise.yaml
 # kubectl apply -f yaml/run_self_forcing_inference_monarch_fast_framewise.yaml
 
 # kubectl apply -f yaml/run_wan_fewstep_inference_svg2_0.85.yaml
 # kubectl apply -f yaml/run_wan_fewstep_inference_svg2_0.90.yaml
 # kubectl apply -f yaml/run_wan_fewstep_inference_svg2_0.95.yaml
+
+kubectl apply -f run_wan_fewstep_inference_svg2_0.85.yaml
+kubectl apply -f run_wan_fewstep_inference_svg2_0.90.yaml
+kubectl apply -f run_wan_fewstep_inference_svg2_0.95.yaml
+kubectl apply -f run_wan_fewstep_inference_svg.yaml
+kubectl apply -f run_wan_fewstep_inference_topk.yaml
+kubectl apply -f run_wan_fewstep_inference.yaml
+kubectl apply -f run_wan_fewstep_inference_monarch_fast_framewise.yaml
+kubectl apply -f run_wan_fewstep_inference_monarch_slow_framewise.yaml
+kubectl apply -f run_wan_fewstep_inference_radial_attn.yaml
