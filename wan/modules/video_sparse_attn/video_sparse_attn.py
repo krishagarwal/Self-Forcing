@@ -155,8 +155,6 @@ class VideoSparseAttentionMetadataBuilder:
         device: torch.device,
         **kwargs: dict[str, Any],
     ) -> VideoSparseAttentionMetadata:
-        patch_size = patch_size
-
         num_tiles = (math.ceil(dit_seq_shape[0] / VSA_TILE_SIZE[0]),
                      math.ceil(dit_seq_shape[1] / VSA_TILE_SIZE[1]),
                      math.ceil(dit_seq_shape[2] / VSA_TILE_SIZE[2]))
