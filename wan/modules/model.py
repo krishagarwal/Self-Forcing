@@ -680,7 +680,7 @@ class WanSelfAttention(nn.Module):
                 # x = rearrange(x, 'b s (h d) -> b s h d', d=d)
                 x = radial_sdpa_video_only(roped_query, roped_key, v, WanSelfAttention.sdpa_mask)
                 assert x.shape == roped_query.shape
-        elif not self.disable_monarch:
+        elif self.disable_monarch:
             if self.topk is not None:
                 x_all = []
                 s = roped_query.size(1)
