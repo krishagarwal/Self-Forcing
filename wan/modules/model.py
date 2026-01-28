@@ -642,12 +642,13 @@ class WanSelfAttention(nn.Module):
             ).transpose(1, 2)
         elif self.use_vsa:
             if self.attn_metadata is None:
-                self.attn_metadata = VideoSparseAttentionMetadataBuilder().build(([s // 1560, 30, 52]), self.vsa_sparsity, x.device)
+                self.attn_metadata = VideoSparseAttentionMetadataBuilder().build(((s // 1560, 30, 52)), self.vsa_sparsity, x.device)
             gate = self.gate_compress(x).view(b, s, n, d)
             qkvg = torch.cat([roped_query, roped_key, v, gate], dim=0)
             qkvg = self.attn_impl.preprocess_qkv(qkvg, self.attn_metadata)
             roped_query, roped_key, v, g = qkvg.chunk(4, dim=0)
             x = self.attn_impl.forward(roped_query, roped_key, v, g, self.attn_metadata)
+            x = self.attn_impl.postprocess_output(x, self.attn_metadata)
         elif self.use_radial_attn:
             # 0.036 covers first 12 timesteps
             if ((timestep > 1000 * (1 - 0.036)) or self.block_num < 1) and self.use_hacks:
