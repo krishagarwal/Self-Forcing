@@ -277,6 +277,7 @@ class Trainer:
             self.benchmark_prompts = all_prompts
             self.benchmark_samples = config.benchmark_samples if hasattr(config, 'benchmark_samples') else 1
             self.rename_prompts = (not config.disable_benchmark_rename) if hasattr(config, 'disable_benchmark_rename') else True
+            self.benchmark_output_prefix = config.benchmark_output_prefix if hasattr(config, 'benchmark_output_prefix') else None
         else:
             self.benchmark_prompts = None
             self.benchmark_samples = 0
@@ -744,7 +745,11 @@ class Trainer:
                     filename_fn = lambda step, i, sample_num, prompt: f"/workspace/vbench_videos_ema/{prompt}-{sample_num}.mp4"
                     self.run_final_validation(prompts=self.benchmark_prompts, samples=self.benchmark_samples, filename_fn=filename_fn)
                     if self.local_rank == 0:
-                        os.system(f"aws s3 cp /workspace/vbench_videos_ema s3://agi-mm-training-shared-us-east-2/beidchen/data/{self.run_name}_ema_vbench_videos/ --region us-east-2 --recursive")
+                        if self.benchmark_output_prefix is None:
+                            path = f"s3://agi-mm-training-shared-us-east-2/beidchen/data/{self.run_name}_ema_vbench_videos/"
+                        else:
+                            path = f"s3://agi-mm-training-shared-us-east-2/beidchen/data/{self.benchmark_output_prefix}/{self.run_name}_ema_vbench_videos/"
+                        os.system(f"aws s3 cp /workspace/vbench_videos_ema {path} --region us-east-2 --recursive")
 
             os.makedirs("/workspace/vbench_videos", exist_ok=True)
             filename_fn = lambda step, i, sample_num, prompt: f"/workspace/vbench_videos/{prompt}-{sample_num}.mp4"
@@ -752,7 +757,11 @@ class Trainer:
             if self.local_rank == 0:
                 print(f"uploading data from rank {self.global_rank}")
                 os.system("ls -l /workspace/vbench_videos | wc -l")
-                os.system(f"aws s3 cp /workspace/vbench_videos s3://agi-mm-training-shared-us-east-2/beidchen/data/{self.run_name}_vbench_videos/ --region us-east-2 --recursive")
+                if self.benchmark_output_prefix is None:
+                    path = f"s3://agi-mm-training-shared-us-east-2/beidchen/data/{self.run_name}_vbench_videos/"
+                else:
+                    path = f"s3://agi-mm-training-shared-us-east-2/beidchen/data/{self.benchmark_output_prefix}/{self.run_name}_vbench_videos/"
+                os.system(f"aws s3 cp /workspace/vbench_videos {path} --region us-east-2 --recursive")
             barrier()
 
         torch.distributed.destroy_process_group(self.cpu_group)
