@@ -1715,7 +1715,7 @@ def monarch_attn_slow(Q, K, V, sm_scale, num_iters=1):
 
     for _ in range(num_iters - 1):
         bR = torch.einsum("bafkjhd,bfklhd->bhafkjl", aR, K)
-        z = bR.to(torch.float32) * (1.0 / cR)
+        z = bR.to(torch.float32) * (1.0 / (cR + 1e-6)).clamp_max(1e4)
         z = z - z.amax(dim=-1, keepdim=True)
         R = torch.softmax(z, dim=-1).to(Q.dtype)
         aL = torch.einsum("bhafkjl,bfklhd->bafjkhd", R, K)
@@ -1731,7 +1731,7 @@ def monarch_attn_slow(Q, K, V, sm_scale, num_iters=1):
         cR = L.sum(dim=-1, dtype=torch.float32).unsqueeze(-1).transpose(-2, -3) # (b, h, a, f, k, j, 1)
 
     bR = torch.einsum("bafkjhd,bfklhd->bhafkjl", aR, K)
-    z = bR.to(torch.float32) * (1.0 / cR)
+    z = bR.to(torch.float32) * (1.0 / (cR + 1e-6)).clamp_max(1e4)
     z = z - z.amax(dim=-1, keepdim=True)
     R = torch.softmax(z, dim=-1).to(Q.dtype)
     aL = torch.einsum("bhafkjl,bfklhd->bafjkhd", R, K)
