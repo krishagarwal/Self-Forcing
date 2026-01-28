@@ -125,7 +125,7 @@
 # kubectl apply -f yaml/run_wan_fewstep_inference_monarch_slow_framewise_reduce2xh.yaml
 # kubectl apply -f yaml/run_wan_fewstep_inference_radial_attn.yaml
 # kubectl apply -f yaml/run_wan_fewstep_inference_topk.yaml
-kubectl apply -f yaml/run_wan_fewstep_inference_svg.yaml
+# kubectl apply -f yaml/run_wan_fewstep_inference_svg.yaml
 kubectl apply -f yaml/run_wan_fewstep_inference_svg2.yaml
 
 # kubectl apply -f yaml/run_wan_fewstep_dmd.yaml

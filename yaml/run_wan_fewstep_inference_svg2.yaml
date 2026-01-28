@@ -117,7 +117,7 @@ spec:
                   pip install torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu126 &&
                   pip install -r requirements.txt &&
                   MAX_JOBS=4 pip install flash-attn --no-build-isolation &&
-                  pip install flashinfer-python &&
+                  pip install flashinfer-python==0.5.2 &&
                   python setup.py develop &&
                   mkdir -p /checkpoints-fsx/beidchen-sandbox/self_forcing_logs/wan_fewstep_svg2 &&
                   export DISABLE_MONARCH_ATTN=1 &&
