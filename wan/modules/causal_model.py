@@ -1007,7 +1007,7 @@ class CausalWanSelfAttention(nn.Module):
                 curr_v = curr_v.transpose(1, 2).contiguous()
                 
                 padded_q = torch.nn.functional.pad(
-                    roped_query, (0, 0, 0, 0, curr_k.size(1) - roped_query.size(1), 21 * 30 * 52 - curr_k.size(1)), value=0.0
+                    roped_query, (0, 0, curr_k.size(1) - roped_query.size(1), 21 * 30 * 52 - curr_k.size(1)), value=0.0
                 )
                 padded_k = torch.nn.functional.pad(
                     curr_k, (0, 0, 0, 21 * 30 * 52 - curr_k.size(1)), value=0.0
