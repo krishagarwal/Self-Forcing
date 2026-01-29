@@ -167,7 +167,7 @@
 
 # kubectl apply -f yaml4/run_wan_fewstep_inference_topk_0.98.yaml
 
-# kubectl apply -f yaml4/run_wan_fewstep_inference_radial_attn_0.50.yaml
+kubectl apply -f yaml4/run_wan_fewstep_inference_radial_attn_0.50.yaml
 # kubectl apply -f yaml4/run_wan_fewstep_inference_radial_attn_0.70.yaml
 # kubectl apply -f yaml4/run_wan_fewstep_inference_svg_0.50.yaml
 # kubectl apply -f yaml4/run_wan_fewstep_inference_svg_0.70.yaml
