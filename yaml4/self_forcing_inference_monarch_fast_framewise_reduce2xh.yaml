@@ -120,14 +120,14 @@ spec:
                   MAX_JOBS=4 pip install flash-attn --no-build-isolation &&
                   pip install flashinfer-python==0.5.2 &&
                   python setup.py develop &&
-                  mkdir -p /checkpoints-fsx/beidchen-sandbox/self_forcing_logs/metrics_self_forcing_monarch_fast_framewise &&
+                  mkdir -p /checkpoints-fsx/beidchen-sandbox/self_forcing_logs/metrics_self_forcing_monarch_fast_framewise_reduce2xh &&
                   export DISABLE_MONARCH_ATTN=0 &&
-                  export MONARCH_ATTN_FRAMEWISE=1 &&
+                  export MONARCH_ATTN_framewise_reduce2xh=1 &&
                   export MONARCH_ATTN_NUM_ITERS=1 &&
                   export MONARCH_ATTN_H_REDUCE=2 &&
                   export MONARCH_ATTN_W_REDUCE=1 &&
                   export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True &&
-                  torchrun --nproc_per_node=8 --rdzv-conf="timeout=7200,read_timeout=7200,join_timeout=7200" train.py --config_path configs/self_forcing_inference_only_small.yaml --logdir /checkpoints-fsx/beidchen-sandbox/self_forcing_logs/metrics_self_forcing_monarch_fast_framewise --wandb_name metrics_self_forcing_monarch_fast_framewise | tee /code-fsx/beidchen-sandbox/metrics_self_forcing_monarch_fast_framewise.log
+                  torchrun --nproc_per_node=8 --rdzv-conf="timeout=7200,read_timeout=7200,join_timeout=7200" train.py --config_path configs/self_forcing_inference_only_small.yaml --logdir /checkpoints-fsx/beidchen-sandbox/self_forcing_logs/metrics_self_forcing_monarch_fast_framewise_reduce2xh --wandb_name metrics_self_forcing_monarch_fast_framewise_reduce2xh | tee /code-fsx/beidchen-sandbox/metrics_self_forcing_monarch_fast_framewise_reduce2xh.log
               image: 767397878797.dkr.ecr.us-east-1.amazonaws.com/agif-mm-pt-base:reasoning-vllm.sglang.megatron.deepseek.video.fa3
               imagePullPolicy: Always
               securityContext:
