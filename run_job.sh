@@ -137,7 +137,7 @@
 # kubectl apply -f yaml/run_wan_fewstep_dmd_vsa90.yaml
 
 # kubectl apply -f yaml/run_self_forcing_inference_monarch_slow_framewise_reduce2xh.yaml
-# kubectl apply -f yaml/run_self_forcing_inference_monarch_fast_framewise_reduce2xh.yaml
+kubectl apply -f yaml/run_self_forcing_inference_monarch_fast_framewise_reduce2xh.yaml
 
 # kubectl apply -f yaml/run_wan_fewstep_inference_svg2_0.85.yaml
 # kubectl apply -f yaml/run_wan_fewstep_inference_svg2_0.90.yaml
