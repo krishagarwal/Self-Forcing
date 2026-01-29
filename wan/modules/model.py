@@ -522,14 +522,19 @@ class WanSelfAttention(nn.Module):
             if block_num in layer_disable_list:
                 self.disable_monarch = True
         self.use_svg = bool(int(os.getenv("USE_SVG", "0")))
+        if self.use_svg:
+            self.svg_density = 1 - float(os.getenv("SVG_SPARSITY", "0.85"))
         self.use_svg2 = bool(int(os.getenv("USE_SVG2", "0")))
         if self.use_svg2:
-            sparsity = float(os.getenv("SVG2_SPARSITY", "0.90"))
+            sparsity = float(os.getenv("SVG2_SPARSITY", "0.70"))
             self.svg2_processor = WanAttn_SAPAttn_Processor(layer_idx=block_num)
             self.svg2_processor.first_layers_fp = 0.025 if self.use_hacks else 0
             self.svg2_processor.first_times_fp = 0.036 if self.use_hacks else 0 # 0.036 covers first 12 timesteps
             self.svg2_processor.num_q_centroids = 200
             self.svg2_processor.num_k_centroids = 1000
+            if sparsity == 0.50:
+                self.svg2_processor.top_p_kmeans = 0.9
+                self.svg2_processor.min_kc_ratio = 0.4
             if sparsity == 0.85:
                 self.svg2_processor.top_p_kmeans = 0.5
                 self.svg2_processor.min_kc_ratio = 0.1
@@ -540,6 +545,7 @@ class WanSelfAttention(nn.Module):
                 self.svg2_processor.top_p_kmeans = 0.3
                 self.svg2_processor.min_kc_ratio = 0.02
             else:
+                # default 70% sparsity
                 self.svg2_processor.top_p_kmeans = 0.9
                 self.svg2_processor.min_kc_ratio = 0.1
             self.svg2_processor.kmeans_iter_init = 50
@@ -554,6 +560,7 @@ class WanSelfAttention(nn.Module):
         self.use_radial_attn = bool(int(os.getenv("USE_RADIAL_ATTN", "0")))
         if self.use_radial_attn:
             # self.mask_map = None
+            self.radial_attn_sparsity = float(os.getenv("RADIAL_ATTN_SPARSITY", "0.85"))
             WanSelfAttention.sdpa_mask = None
         self.block_num = block_num
 
@@ -605,7 +612,7 @@ class WanSelfAttention(nn.Module):
                 WanAttn_SVGAttn_Processor2_0.first_times_fp = 0.036 if self.use_hacks else 0 # 0.036 covers first 12 timesteps
 
                 multiplier = diag_width = sparsity_to_width(
-                    0.15, 0, num_frame_patches, frame_patches_one_frame
+                    self.svg_density, 0, num_frame_patches, frame_patches_one_frame
                 )
                 WanAttn_SVGAttn_Processor2_0.context_length = 0
                 WanAttn_SVGAttn_Processor2_0.num_frame = num_frame_patches
@@ -673,7 +680,14 @@ class WanSelfAttention(nn.Module):
                 # if self.mask_map is None:
                 #     self.mask_map = MaskMap(video_token_num=roped_key.size(1), num_frame=roped_key.size(1)//(30*52))
                 if WanSelfAttention.sdpa_mask is None:
-                    WanSelfAttention.sdpa_mask = build_radial_dense_allow_mask(video_token_num=roped_key.size(1), num_frame=roped_key.size(1)//(30*52), block_size=1, decay_factor=0.0, model_type="wan", device=x.device)
+                    if self.radial_attn_sparsity == 0.50:
+                        block_size, decay_factor = 128, 1.5
+                    elif self.radial_attn_sparsity == 0.70:
+                        block_size, decay_factor = 128, 0.0
+                    else:
+                        # default 85% sparsity
+                        block_size, decay_factor = 1, 0.0
+                    WanSelfAttention.sdpa_mask = build_radial_dense_allow_mask(video_token_num=roped_key.size(1), num_frame=roped_key.size(1)//(30*52), block_size=block_size, decay_factor=decay_factor, model_type="wan", device=x.device)
                 assert roped_query.shape == roped_key.shape
                 # x = RadialAttention(
                 #     roped_query, roped_key, v, self.mask_map, sparsity_type="radial", block_size=1, decay_factor=0.0, model_type="wan", pre_defined_mask=None, use_sage_attention=False
