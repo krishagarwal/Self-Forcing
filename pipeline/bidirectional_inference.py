@@ -44,6 +44,8 @@ class BidirectionalInferencePipeline(torch.nn.Module):
             video (torch.Tensor): The generated video tensor of shape
                 (batch_size, num_frames, num_channels, height, width). It is normalized to be in the range [0, 1].
         """
+        global seed_count, rand_seeds
+
         assert initial_latent is None, "Initial latent is not supported in bidirectional inference"
         conditional_dict = self.text_encoder(
             text_prompts=text_prompts
@@ -64,7 +66,6 @@ class BidirectionalInferencePipeline(torch.nn.Module):
             next_timestep = self.denoising_step_list[index + 1] * torch.ones(
                 noise.shape[:2], dtype=torch.long, device=noise.device)
 
-            global seed_count, rand_seeds
             torch.manual_seed(rand_seeds[seed_count])
             seed_count = (seed_count + 1) % len(rand_seeds)
 

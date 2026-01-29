@@ -72,6 +72,8 @@ class CausalInferencePipeline(torch.nn.Module):
                 (batch_size, num_output_frames, num_channels, height, width).
                 It is normalized to be in the range [0, 1].
         """
+        global seed_count, rand_seeds
+
         batch_size, num_frames, num_channels, height, width = noise.shape
         if not self.independent_first_frame or (self.independent_first_frame and initial_latent is not None):
             # If the first frame is independent and the first frame is provided, then the number of frames in the
@@ -207,7 +209,6 @@ class CausalInferencePipeline(torch.nn.Module):
                     )
                     next_timestep = self.denoising_step_list[index + 1]
 
-                    global seed_count, rand_seeds
                     torch.manual_seed(rand_seeds[seed_count])
                     seed_count = (seed_count + 1) % len(rand_seeds)
 

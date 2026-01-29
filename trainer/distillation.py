@@ -489,6 +489,7 @@ class Trainer:
         return critic_log_dict
 
     def generate_video(self, pipeline, prompts, image=None):
+        global seed_count, rand_seeds
         batch_size = len(prompts)
         if image is not None:
             image = image.squeeze(0).unsqueeze(0).unsqueeze(2).to(device="cuda", dtype=torch.bfloat16)
@@ -496,7 +497,6 @@ class Trainer:
             # Encode the input image as the first latent
             initial_latent = pipeline.vae.encode_to_latent(image).to(device="cuda", dtype=torch.bfloat16)
             initial_latent = initial_latent.repeat(batch_size, 1, 1, 1, 1)
-            global seed_count, rand_seeds
             torch.manual_seed(rand_seeds[seed_count])
             seed_count = (seed_count + 1) % len(rand_seeds)
             sampled_noise = torch.randn(
@@ -506,7 +506,6 @@ class Trainer:
             )
         else:
             initial_latent = None
-            global seed_count, rand_seeds
             torch.manual_seed(rand_seeds[seed_count])
             seed_count = (seed_count + 1) % len(rand_seeds)
             sampled_noise = torch.randn(

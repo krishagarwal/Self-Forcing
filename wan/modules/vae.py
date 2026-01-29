@@ -596,12 +596,13 @@ class WanVAE_(nn.Module):
         return out
 
     def sample(self, imgs, deterministic=False):
+        global seed_count, rand_seeds
+
         mu, log_var = self.encode(imgs)
         if deterministic:
             return mu
         std = torch.exp(0.5 * log_var.clamp(-30.0, 20.0))
 
-        global seed_count, rand_seeds
         torch.manual_seed(rand_seeds[seed_count])
         seed_count = (seed_count + 1) % len(rand_seeds)
 
