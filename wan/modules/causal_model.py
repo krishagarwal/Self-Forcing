@@ -735,7 +735,6 @@ class CausalWanSelfAttention(nn.Module):
         self.max_attention_size = 32760 if local_attn_size == -1 else local_attn_size * 1560
 
         self.num_iters = int(os.getenv("MONARCH_ATTN_NUM_ITERS", "1"))
-        self.use_initialize = bool(int(os.getenv("MONARCH_ATTN_USE_INITIALIZE", "0")))
         self.use_dense_init = bool(int(os.getenv("USE_DENSE_INIT", "0")))
         self.h_reduce = int(os.getenv("MONARCH_ATTN_H_REDUCE", "1"))
         self.w_reduce = int(os.getenv("MONARCH_ATTN_W_REDUCE", "1"))
@@ -746,7 +745,6 @@ class CausalWanSelfAttention(nn.Module):
         if self.init_w_reduce is not None:
             self.init_w_reduce = int(self.init_w_reduce)
         self.use_framewise = bool(int(os.getenv("MONARCH_ATTN_FRAMEWISE", "0")))
-        assert not (self.use_framewise and self.use_initialize), "Framewise already enabled, init does not make sense"
         self.disable_monarch = bool(int(os.getenv("DISABLE_MONARCH_ATTN", "0")))
         self.exact_monarch = bool(int(os.getenv("MONARCH_ATTN_EXACT", "0")))
         layer_disable_list = os.getenv("MONARCH_ATTN_DISABLE_LAYERS")
