@@ -524,6 +524,7 @@ class WanSelfAttention(nn.Module):
         self.use_svg = bool(int(os.getenv("USE_SVG", "0")))
         self.use_svg2 = bool(int(os.getenv("USE_SVG2", "0")))
         if self.use_svg2:
+            sparsity = float(os.getenv("SVG2_SPARSITY", "0.90"))
             self.svg2_processor = WanAttn_SAPAttn_Processor(layer_idx=block_num)
             self.svg2_processor.first_layers_fp = 0.025 if self.use_hacks else 0
             self.svg2_processor.first_times_fp = 0.036 if self.use_hacks else 0 # 0.036 covers first 12 timesteps
