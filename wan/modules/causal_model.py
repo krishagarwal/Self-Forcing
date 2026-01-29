@@ -961,7 +961,7 @@ class CausalWanSelfAttention(nn.Module):
                 curr_v[:, local_start_index:local_end_index] = v
                 target_seq_len = 21 * 30 * 52 # curr_k.size(1)
                 if WanAttn_SVGAttn_Processor2_0.curr_seq_len != target_seq_len:
-                    sample_mse_max_row = 10000
+                    sample_mse_max_row = target_seq_len
                     WanAttn_SVGAttn_Processor2_0.num_sampled_rows = 64
                     WanAttn_SVGAttn_Processor2_0.sample_mse_max_row = sample_mse_max_row
                     num_frame_patches = target_seq_len // (30 * 52)
@@ -1007,17 +1007,17 @@ class CausalWanSelfAttention(nn.Module):
                 curr_v = curr_v.transpose(1, 2).contiguous()
                 
                 padded_q = torch.nn.functional.pad(
-                    roped_query, (0, 0, curr_k.size(1) - roped_query.size(1), 21 * 30 * 52 - curr_k.size(1)), value=0.0
+                    roped_query, (0, 0, curr_k.size(2) - roped_query.size(2), 21 * 30 * 52 - curr_k.size(2)), value=0.0
                 )
                 padded_k = torch.nn.functional.pad(
-                    curr_k, (0, 0, 0, 21 * 30 * 52 - curr_k.size(1)), value=0.0
+                    curr_k, (0, 0, 0, 21 * 30 * 52 - curr_k.size(2)), value=0.0
                 )
                 padded_v = torch.nn.functional.pad(
-                    curr_v, (0, 0, 0, 21 * 30 * 52 - curr_v.size(1)), value=0.0
+                    curr_v, (0, 0, 0, 21 * 30 * 52 - curr_v.size(2)), value=0.0
                 )
                 assert padded_q.shape == padded_k.shape
-                WanAttn_SVGAttn_Processor2_0.sample_mse_min_row = curr_k.size(1) - roped_query.size(1)
-                WanAttn_SVGAttn_Processor2_0.sample_mse_max_row = curr_k.size(1)
+                WanAttn_SVGAttn_Processor2_0.sample_mse_min_row = curr_k.size(2) - roped_query.size(2)
+                WanAttn_SVGAttn_Processor2_0.sample_mse_max_row = curr_k.size(2)
 
                 # padded_q = padded_q.transpose(1, 2).contiguous()
                 # curr_k = curr_k.transpose(1, 2).contiguous()
@@ -1030,8 +1030,8 @@ class CausalWanSelfAttention(nn.Module):
                     timestep=timestep,
                 ).transpose(1, 2)
                 # x = x[:, -roped_query.size(1):, :, :]
-                x = x[:, curr_k.size(1) - roped_query.size(1) : curr_k.size(1), :, :]
-                assert x.shape == roped_query.shape
+                x = x[:, curr_k.size(2) - roped_query.size(2) : curr_k.size(2), :, :]
+                # assert x.shape == roped_query.shape
             elif self.use_radial_attn:
                 curr_k[:, local_start_index:local_end_index] = roped_key
                 curr_v[:, local_start_index:local_end_index] = v
