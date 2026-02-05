@@ -199,3 +199,4 @@
 
 kubectl apply -f yaml/run_moviigen_fewstep_dmd.yaml
 kubectl apply -f yaml/run_moviigen_fewstep_dmd_monarch_tied3frame.yaml
+kubectl apply -f yaml/run_moviigen_fewstep_dmd_monarch_framewise.yaml
