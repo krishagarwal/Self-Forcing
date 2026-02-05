@@ -6,6 +6,8 @@ from wan.utils.fm_solvers import FlowDPMSolverMultistepScheduler, get_sampling_s
 from wan.utils.fm_solvers_unipc import FlowUniPCMultistepScheduler
 from utils.wan_wrapper import WanDiffusionWrapper, WanTextEncoder, WanVAEWrapper
 
+from utils.resolution import total_seq_len, frame_height, frame_width
+
 
 class CausalDiffusionInferencePipeline(torch.nn.Module):
     def __init__(
@@ -30,7 +32,7 @@ class CausalDiffusionInferencePipeline(torch.nn.Module):
         self.shift = args.timestep_shift
 
         self.num_transformer_blocks = self.generator.model.num_layers
-        self.frame_seq_length = 1560
+        self.frame_seq_length = frame_height * frame_width
 
         self.kv_cache_pos = None
         self.kv_cache_neg = None
@@ -278,7 +280,7 @@ class CausalDiffusionInferencePipeline(torch.nn.Module):
             kv_cache_size = self.local_attn_size * self.frame_seq_length
         else:
             # Use the default KV cache size
-            kv_cache_size = 32760
+            kv_cache_size = total_seq_len
 
         for _ in range(self.num_transformer_blocks):
             kv_cache_pos.append({

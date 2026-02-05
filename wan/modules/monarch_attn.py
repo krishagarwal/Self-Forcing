@@ -1481,8 +1481,9 @@ class _attention_no_cache(torch.autograd.Function):
             return torch.empty(size, dtype=torch.int8, device="cuda")
         triton.set_allocator(alloc_fn)
 
+        # TODO: temporary hardcoded sizes to use less memory but have roughly same speed as non-streaming impl
         Q_FRAME_CHUNK = 1
-        KV_FRAME_CHUNK = 1
+        KV_FRAME_CHUNK = f
 
         aL = torch.empty((b, Q_FRAME_CHUNK, KV_FRAME_CHUNK, block_b2, block_b1, h, d), device=q.device, dtype=q.dtype) # (b, a, f, j, k, h, d)
         cL = torch.empty((b, h, Q_FRAME_CHUNK, KV_FRAME_CHUNK, block_b2, block_b1), device=q.device, dtype=torch.float32)  # (b, h, a, f, j, k)
@@ -1585,8 +1586,9 @@ class _attention_no_cache(torch.autograd.Function):
             d,
         )
 
+        # TODO: temporary hardcoded sizes to use less memory but have roughly same speed as non-streaming impl
         Q_FRAME_CHUNK = 1
-        KV_FRAME_CHUNK = 1
+        KV_FRAME_CHUNK = f
 
         aL = torch.empty((b, Q_FRAME_CHUNK, KV_FRAME_CHUNK, block_b2, block_b1, h, d), device=q.device, dtype=q.dtype) # (b, a, f, j, k, h, d)
         cL = torch.empty((b, h, Q_FRAME_CHUNK, KV_FRAME_CHUNK, block_b2, block_b1), device=q.device, dtype=torch.float32)  # (b, h, a, f, j, k)

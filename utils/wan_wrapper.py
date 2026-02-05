@@ -10,6 +10,8 @@ from wan.modules.vae import _video_vae
 from wan.modules.t5 import umt5_xxl
 from wan.modules.causal_model import CausalWanModel
 
+from utils.resolution import total_seq_len
+
 
 class WanTextEncoder(torch.nn.Module):
     def __init__(self) -> None:
@@ -140,7 +142,7 @@ class WanDiffusionWrapper(torch.nn.Module):
         )
         self.scheduler.set_timesteps(1000, training=True)
 
-        self.seq_len = 32760  # [1, 21, 16, 60, 104]
+        self.seq_len = total_seq_len  # [1, 21, 16, 60, 104]
         self.post_init()
 
     def enable_gradient_checkpointing(self) -> None:

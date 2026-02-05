@@ -16,6 +16,9 @@ from .radial_attn.radial_attn_torch import build_radial_dense_allow_mask, radial
 from .video_sparse_attn.video_sparse_attn import VideoSparseAttentionMetadataBuilder, VideoSparseAttentionImpl
 from .monarch_attn import monarch_attn
 
+
+from utils.resolution import frame_height, frame_width
+
 __all__ = ['WanModel']
 
 class MonarchAttnImplicitFn(torch.autograd.Function):
@@ -599,8 +602,8 @@ class WanSelfAttention(nn.Module):
                 sample_mse_max_row = 10000
                 WanAttn_SVGAttn_Processor2_0.num_sampled_rows = 64
                 WanAttn_SVGAttn_Processor2_0.sample_mse_max_row = sample_mse_max_row
-                num_frame_patches = target_seq_len // (30 * 52)
-                frame_patches_one_frame = 30 * 52
+                num_frame_patches = target_seq_len // (frame_height * frame_width)
+                frame_patches_one_frame = frame_height * frame_width
                 masks = ["spatial", "temporal"]
                 WanAttn_SVGAttn_Processor2_0.attention_masks = [
                     get_attention_mask(
@@ -650,8 +653,8 @@ class WanSelfAttention(nn.Module):
                 self.svg2_processor.q_centroids = None
                 self.svg2_processor.k_centroids = None
                 self.svg2_processor.context_length = 0
-                self.svg2_processor.num_frame = 30 * 52
-                self.svg2_processor.frame_size = roped_key.size(1) // (30 * 52)
+                self.svg2_processor.num_frame = roped_key.size(1) // (frame_height * frame_width)
+                self.svg2_processor.frame_size = frame_height * frame_width
             x = self.svg2_processor.attention_core_logic(
                 roped_query.transpose(1, 2).contiguous(),
                 roped_key.transpose(1, 2).contiguous(),
@@ -660,7 +663,7 @@ class WanSelfAttention(nn.Module):
             ).transpose(1, 2)
         elif self.use_vsa:
             if self.attn_metadata is None:
-                self.attn_metadata = VideoSparseAttentionMetadataBuilder().build(((s // 1560, 30, 52)), self.vsa_sparsity, x.device)
+                self.attn_metadata = VideoSparseAttentionMetadataBuilder().build(((s // (frame_height * frame_width), frame_height, frame_width)), self.vsa_sparsity, x.device)
             gate = self.gate_compress(x).view(b, s, n, d)
             qkvg = torch.cat([roped_query, roped_key, v, gate], dim=0)
             qkvg = self.attn_impl.preprocess_qkv(qkvg, self.attn_metadata)
@@ -678,7 +681,7 @@ class WanSelfAttention(nn.Module):
                     window_size=self.window_size)
             else:
                 # if self.mask_map is None:
-                #     self.mask_map = MaskMap(video_token_num=roped_key.size(1), num_frame=roped_key.size(1)//(30*52))
+                #     self.mask_map = MaskMap(video_token_num=roped_key.size(1), num_frame=roped_key.size(1)//(frame_height*frame_width))
                 if WanSelfAttention.sdpa_mask is None:
                     if self.radial_attn_sparsity == 0.50:
                         block_size, decay_factor = 128, 1.5
@@ -687,7 +690,7 @@ class WanSelfAttention(nn.Module):
                     else:
                         # default 85% sparsity
                         block_size, decay_factor = 1, 0.0
-                    WanSelfAttention.sdpa_mask = build_radial_dense_allow_mask(video_token_num=roped_key.size(1), num_frame=roped_key.size(1)//(30*52), block_size=block_size, decay_factor=decay_factor, model_type="wan", device=x.device)
+                    WanSelfAttention.sdpa_mask = build_radial_dense_allow_mask(video_token_num=roped_key.size(1), num_frame=roped_key.size(1)//(frame_height*frame_width), block_size=block_size, decay_factor=decay_factor, model_type="wan", device=x.device)
                 assert roped_query.shape == roped_key.shape
                 # x = RadialAttention(
                 #     roped_query, roped_key, v, self.mask_map, sparsity_type="radial", block_size=1, decay_factor=0.0, model_type="wan", pre_defined_mask=None, use_sage_attention=False

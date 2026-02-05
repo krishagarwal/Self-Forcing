@@ -194,5 +194,8 @@
 # kubectl apply -f yaml4/run_wan_inference_topk_0.95.yaml
 # kubectl apply -f yaml4/run_wan_inference.yaml
 
-kubectl apply -f yaml/run_self_forcing_inference_14b.yaml
-kubectl apply -f yaml/run_self_forcing_inference_monarch_fast_framewise_14b.yaml
+# kubectl apply -f yaml/run_self_forcing_inference_14b.yaml
+# kubectl apply -f yaml/run_self_forcing_inference_monarch_fast_framewise_14b.yaml
+
+kubectl apply -f yaml/run_moviigen_fewstep_dmd.yaml
+kubectl apply -f yaml/run_moviigen_fewstep_dmd_monarch_tied3frame.yaml
