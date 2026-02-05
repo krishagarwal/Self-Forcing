@@ -22,6 +22,8 @@ from torchvision.io import write_video
 from pipeline import CausalInferencePipeline, CausalDiffusionInferencePipeline, BidirectionalInferencePipeline, BidirectionalDiffusionInferencePipeline
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 
+from utils.resolution import latent_shape
+
 class Trainer:
     def __init__(self, config):
         self.config = config
@@ -341,7 +343,7 @@ class Trainer:
     def generate_video(self, pipeline, prompts, image=None):
         batch_size = len(prompts)
         sampled_noise = torch.randn(
-            [batch_size, self.model.num_training_frames, 16, 60, 104], device="cuda", dtype=self.dtype
+            [batch_size, self.model.num_training_frames, *latent_shape[-3:]], device="cuda", dtype=self.dtype
         )
         video, _ = pipeline.inference(
             noise=sampled_noise,

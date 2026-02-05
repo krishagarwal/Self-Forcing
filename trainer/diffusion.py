@@ -27,6 +27,8 @@ from torch.distributed.device_mesh import init_device_mesh
 
 from safetensors.torch import load_file
 
+from utils.resolution import latent_shape
+
 class Trainer:
     def __init__(self, config):
         self.config = config
@@ -497,7 +499,7 @@ class Trainer:
     def generate_video(self, pipeline, prompts, image=None):
         batch_size = len(prompts)
         sampled_noise = torch.randn(
-            [batch_size, self.model.num_training_frames, 16, 60, 104], device="cuda", dtype=self.dtype
+            [batch_size, self.model.num_training_frames, *latent_shape[-3:]], device="cuda", dtype=self.dtype
         )
         video, _ = pipeline.inference(
             noise=sampled_noise,

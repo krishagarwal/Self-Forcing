@@ -15,6 +15,8 @@ import wandb
 import time
 import os
 
+from utils.resolution import latent_shape
+
 
 class Trainer:
     def __init__(self, config):
@@ -324,7 +326,7 @@ class Trainer:
     def generate_video(self, pipeline, prompts, image=None):
         batch_size = len(prompts)
         sampled_noise = torch.randn(
-            [batch_size, 21, 16, 60, 104], device="cuda", dtype=self.dtype
+            [batch_size, 21, *latent_shape[-3:]], device="cuda", dtype=self.dtype
         )
         video, _ = pipeline.inference(
             noise=sampled_noise,
