@@ -197,6 +197,8 @@
 # kubectl apply -f yaml/run_self_forcing_inference_14b.yaml
 # kubectl apply -f yaml/run_self_forcing_inference_monarch_fast_framewise_14b.yaml
 
-kubectl apply -f yaml/run_moviigen_fewstep_dmd.yaml
-kubectl apply -f yaml/run_moviigen_fewstep_dmd_monarch_tied3frame.yaml
-kubectl apply -f yaml/run_moviigen_fewstep_dmd_monarch_framewise.yaml
+# kubectl apply -f yaml/run_moviigen_fewstep_dmd.yaml
+# kubectl apply -f yaml/run_moviigen_fewstep_dmd_monarch_tied3frame.yaml
+# kubectl apply -f yaml/run_moviigen_fewstep_dmd_monarch_framewise.yaml
+
+kubectl apply -f yaml/run_wan_fewstep_dmd_vsa_90.yaml
