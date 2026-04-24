@@ -203,5 +203,7 @@
 
 # kubectl apply -f yaml/run_wan_fewstep_dmd_vsa_90.yaml
 
-kubectl apply -f yaml/run_wan_manystep_inference_svg2_0.85.yaml
-kubectl apply -f yaml/run_wan_manystep_inference_svg2_0.90.yaml
+# kubectl apply -f yaml/run_wan_manystep_inference_svg2_0.85.yaml
+# kubectl apply -f yaml/run_wan_manystep_inference_svg2_0.90.yaml
+
+kubectl apply -f yaml/run_wan_fewstep_dmd.yaml
